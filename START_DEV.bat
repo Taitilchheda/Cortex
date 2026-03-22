@@ -1,7 +1,7 @@
 @echo off
-title Mission Control — Development
+title Cortex — Development
 echo ╔══════════════════════════════════════════════╗
-echo ║  Mission Control — Development Mode           ║
+echo ║  Cortex — Development Mode           ║
 echo ╚══════════════════════════════════════════════╝
 echo.
 

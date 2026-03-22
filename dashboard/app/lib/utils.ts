@@ -1,10 +1,10 @@
-// Mission Control — Utilities
+// Cortex — Utilities
 // Markdown parser, syntax highlight helper, uid generator
 
 let uidCounter = 0;
 
 export function uid(): string {
-  return `mc-${Date.now()}-${++uidCounter}`;
+  return `ctx-${Date.now()}-${++uidCounter}`;
 }
 
 export function formatTimestamp(ts: number): string {

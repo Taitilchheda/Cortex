@@ -1,7 +1,7 @@
 @echo off
-title Mission Control — Installation
+title Cortex — Installation
 echo ╔══════════════════════════════════════════════╗
-echo ║  Mission Control — First-Time Installation   ║
+echo ║  Cortex — First-Time Installation   ║
 echo ╚══════════════════════════════════════════════╝
 echo.
 

@@ -1,5 +1,5 @@
 """
-Mission Control — Session State Manager
+Cortex — Session State Manager
 SQLite-backed persistent session storage with full event history for replay.
 Implements Future Scope: persistent sessions that survive server restarts.
 """

@@ -1,5 +1,5 @@
 """
-Mission Control — File Writer Agent
+Cortex — File Writer Agent
 Two-phase build pipeline:
   Phase 1 (Architect): Streams a JSON plan with file structure, dependencies, priority.
   Phase 2 (Coder): Non-streaming per-file generation with retry + smart content extraction.

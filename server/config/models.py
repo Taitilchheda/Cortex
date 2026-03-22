@@ -1,5 +1,5 @@
 """
-Mission Control — Model Configuration & Routing
+Cortex — Model Configuration & Routing
 Role-key based routing so the frontend never needs to know model names.
 """
 import httpx

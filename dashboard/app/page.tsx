@@ -15,7 +15,7 @@ import {
 } from './lib/api';
 import { uid } from './lib/utils';
 
-export default function MissionControl() {
+export default function Cortex() {
   // ─── Core State ───────────────────────────────────────────────
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -516,7 +516,7 @@ export default function MissionControl() {
         ) : (
           <div className="ws-empty" id="empty-state">
             <div className="ws-empty__icon">🚀</div>
-            <div className="ws-empty__title">Mission Control</div>
+            <div className="ws-empty__title">Cortex</div>
             <div className="ws-empty__desc">
               Your local AI coding agent. Chat with models, build entire projects,
               refactor codebases — all 100% on-device via Ollama.

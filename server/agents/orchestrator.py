@@ -1,5 +1,5 @@
 """
-Mission Control — Agent Orchestrator
+Cortex — Agent Orchestrator
 Routes tasks to the correct agent: build, chat, aider refactor.
 Implements multi-turn conversation memory and git integration (Future Scope).
 """
@@ -273,7 +273,7 @@ async def _git_auto_commit(project_path: str, task_description: str) -> None:
                     "options": {"temperature": 0.3, "num_predict": 100},
                 },
             )
-            commit_msg = resp.json().get("response", "Auto-commit by Mission Control").strip()
+            commit_msg = resp.json().get("response", "Auto-commit by Cortex").strip()
             # Clean up the message
             commit_msg = commit_msg.split('\n')[0][:72]
         

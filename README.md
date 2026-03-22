@@ -1,7 +1,7 @@
-# 🚀 Mission Control (Cortex)
+# 🚀 Cortex
 
 > **The Fully Local, Privacy-First AI Coding Workstation.**  
-> Mission Control is a high-performance, multi-agent development environment designed to run 100% on your local machine. No cloud, no monthly bills, no data leaks. Just pure local intelligence.
+> Cortex is a high-performance, multi-agent development environment designed to run 100% on your local machine. No cloud, no monthly bills, no data leaks. Just pure local intelligence.
 
 ---
 
@@ -18,7 +18,7 @@
 
 ## 🏗️ System Architecture
 
-Mission Control uses a decoupled **Double-N** architecture (Next.js + Node.js/Python).
+Cortex uses a decoupled **Double-N** architecture (Next.js + Node.js/Python).
 
 ### 📡 High-Level Overview
 ```mermaid
@@ -71,7 +71,7 @@ graph TD
 
 ## 🥊 Competitive Analysis
 
-| Feature | Mission Control | Cursor | GitHub Copilot | OpenAI Codex |
+| Feature | Cortex | Cursor | GitHub Copilot | OpenAI Codex |
 |---------|-----------------|--------|----------------|--------------|
 | **Local/Private** | ✅ Yes (100%) | ❌ No | ❌ No | ❌ No |
 | **Model Choice** | ✅ Any Ollama Model | ❌ Locked | ❌ Locked | ❌ Locked |
@@ -136,7 +136,7 @@ Cortex/
 
 ## 🗺️ Roadmap (v5.0)
 
-We are currently transitioning from v4 to **Mission Control v5.0**. Upcoming features include:
+We are currently transitioning from v4 to **Cortex v5.0**. Upcoming features include:
 - [ ] **🧠 RAG Context Engine**: Local vector search for your entire codebase (ChromaDB).
 - [ ] **📟 Integrated Terminal**: xterm.js terminal embedded in the dashboard.
 - [ ] **📝 Monaco Code Editor**: Full VS Code-style editor in the file preview panel.

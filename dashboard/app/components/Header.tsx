@@ -79,9 +79,9 @@ export default function AppBar({ ollamaOk, modelCount, sessionCount, onGlobalSea
     <div className="app-bar" id="app-bar">
       {/* Brand */}
       <div className="app-bar__brand">
-        <div className="app-bar__logo" aria-label="Mission Control logo">🚀</div>
-        <span className="app-bar__title">Mission Control</span>
-        <span className="app-bar__ver">v4.0</span>
+        <div className="app-bar__logo" aria-label="Cortex logo">🚀</div>
+        <span className="app-bar__title">Cortex</span>
+        <span className="app-bar__ver">v5.0</span>
       </div>
 
       {/* Global Search with Suggestions */}

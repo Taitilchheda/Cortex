@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Mission Control — Local AI Coding Agent',
+  title: 'Cortex — Local AI Coding Agent',
   description: 'Fully local, multi-model AI coding agent system. Build entire projects, chat with AI, and refactor codebases — all running on your machine with Ollama.',
   icons: { icon: '/favicon.ico' },
 };

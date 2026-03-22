@@ -1,4 +1,4 @@
-// Mission Control — API Client
+// Cortex — API Client
 // All fetch calls to :8000
 
 const API_BASE = 'http://localhost:8000';

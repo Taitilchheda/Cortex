@@ -1,5 +1,5 @@
 """
-Mission Control — FastAPI Main Server
+Cortex — FastAPI Main Server
 All HTTP routes, CORS, file upload, /v1 OpenAI compat, SSE streaming.
 Port: 8000
 """
@@ -37,9 +37,9 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(
-    title="Mission Control",
+    title="Cortex",
     description="Local AI Coding Agent API",
-    version="4.0.0",
+    version="5.0.0",
     lifespan=lifespan,
 )
 
@@ -125,8 +125,8 @@ async def root():
     """Root — server info, Ollama status, endpoint map."""
     ollama = await check_ollama_health()
     return {
-        "name": "Mission Control",
-        "version": "4.0.0",
+        "name": "Cortex",
+        "version": "5.0.0",
         "status": "running",
         "ollama": ollama,
         "endpoints": {

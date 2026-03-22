@@ -1,7 +1,7 @@
 @echo off
-title Mission Control — Diagnostics
+title Cortex — Diagnostics
 echo ╔══════════════════════════════════════════════╗
-echo ║  Mission Control — Diagnostic Tool            ║
+echo ║  Cortex — Diagnostic Tool            ║
 echo ╚══════════════════════════════════════════════╝
 echo.
 
