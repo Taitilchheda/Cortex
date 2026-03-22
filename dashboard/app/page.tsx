@@ -6,6 +6,7 @@ import MessageBubble from './components/MessageBubble';
 import CommandBar from './components/InputBar';
 import AgentOutput from './components/AgentOutput';
 import RightPanel from './components/RightPanel';
+import CommandPalette from './components/CommandPalette';
 import {
   ChatMessage, Session, BuildEvent, AgentMode, ChatRole, FileAttachment
 } from './lib/types';
@@ -14,6 +15,7 @@ import {
   deleteSession, clearSessions, pinSession, fetchPinned
 } from './lib/api';
 import { uid } from './lib/utils';
+import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from 'react-resizable-panels';
 
 export default function Cortex() {
   // ─── Core State ───────────────────────────────────────────────
@@ -452,6 +454,13 @@ export default function Cortex() {
   // ─── Render ───────────────────────────────────────────────────
   return (
     <div className="app-shell" id="app-shell">
+      <CommandPalette
+        sessions={sessions}
+        onSelectSession={handleSelect}
+        onNewSession={handleNew}
+        onClearAll={handleClearAll}
+        onGlobalSearch={handleGlobalSearch}
+      />
       <AppBar
         ollamaOk={ollamaOk}
         modelCount={modelCount}
@@ -460,20 +469,26 @@ export default function Cortex() {
         sessions={sessions}
       />
 
-      <LeftPanel
-        sessions={sessions}
-        activeSessionId={activeSessionId}
-        pinnedIds={pinnedIds}
-        onSelect={handleSelect}
-        onNew={handleNew}
-        onDelete={handleDelete}
-        onClearAll={handleClearAll}
-        onTogglePin={handleTogglePin}
-        onFileSelect={handleFileSelect}
-        searchQuery={searchQuery}
-      />
+      <PanelGroup orientation="horizontal" className="main-panels-group" id="cortex-panels">
+        <Panel defaultSize={20} minSize={15} maxSize={40} className="panel-container">
+          <LeftPanel
+            sessions={sessions}
+            activeSessionId={activeSessionId}
+            pinnedIds={pinnedIds}
+            onSelect={handleSelect}
+            onNew={handleNew}
+            onDelete={handleDelete}
+            onClearAll={handleClearAll}
+            onTogglePin={handleTogglePin}
+            onFileSelect={handleFileSelect}
+            searchQuery={searchQuery}
+          />
+        </Panel>
 
-      <div className="workspace" id="workspace">
+        <PanelResizeHandle className="panel-resizer" />
+
+        <Panel defaultSize={60} minSize={30} className="panel-container" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div className="workspace" id="workspace">
         {/* ── File Preview ── */}
         {filePreview ? (
           <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
@@ -551,8 +566,33 @@ export default function Cortex() {
         )}
       </div>
 
+          <CommandBar
+            onSend={handleSend}
+            onStop={handleStop}
+            isStreaming={isStreaming}
+            contextTokens={contextTokens}
+            contextLimit={contextLimit}
+            defaultMode={defaultMode}
+          />
+        </Panel>
+
+        <PanelResizeHandle className="panel-resizer" />
+
+        <Panel defaultSize={20} minSize={15} maxSize={40} className="panel-container">
+          <RightPanel
+            activeSession={activeSession}
+            fileCount={fileCount}
+            isRunning={isStreaming}
+            doneFiles={doneFiles}
+            totalFiles={totalFiles}
+            contextTokens={contextTokens}
+            contextLimit={contextLimit}
+          />
+        </Panel>
+      </PanelGroup>
+
       {/* Agent Status Bar */}
-      <div className="agent-strip" id="agent-strip" role="status" aria-label="Active agents">
+      <div className="agent-strip" id="agent-strip" role="status" aria-label="Active agents" style={{ position: 'fixed', bottom: 16, right: 350, zIndex: 100 }}>
         {isStreaming ? (
           <div className={`agent-pill ${isStreaming ? 'agent-pill--running' : ''}`}>
             <span>{showAgent ? '⚡' : '💬'}</span>
@@ -568,29 +608,8 @@ export default function Cortex() {
             <span>✅</span>
             <span>Build complete · {doneFiles} files</span>
           </div>
-        ) : (
-          <span style={{ fontSize: 10, color: 'var(--text-4)' }}>No active agents · Ready</span>
-        )}
+        ) : null}
       </div>
-
-      <CommandBar
-        onSend={handleSend}
-        onStop={handleStop}
-        isStreaming={isStreaming}
-        contextTokens={contextTokens}
-        contextLimit={contextLimit}
-        defaultMode={defaultMode}
-      />
-
-      <RightPanel
-        activeSession={activeSession}
-        fileCount={fileCount}
-        isRunning={isStreaming}
-        doneFiles={doneFiles}
-        totalFiles={totalFiles}
-        contextTokens={contextTokens}
-        contextLimit={contextLimit}
-      />
     </div>
   );
 }

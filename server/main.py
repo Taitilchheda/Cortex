@@ -340,6 +340,11 @@ async def get_sessions():
     sessions = await list_sessions()
     return {"sessions": sessions}
 
+@app.get("/sessions/pinned")
+async def get_pinned():
+    """Get list of pinned session IDs."""
+    return {"pinned": list(_pinned_sessions)}
+
 @app.get("/sessions/{session_id}")
 async def get_session_detail(session_id: str):
     """Full session including complete event history for replay."""
@@ -371,11 +376,6 @@ async def pin_session(session_id: str, req: PinRequest):
     else:
         _pinned_sessions.discard(session_id)
     return {"session_id": session_id, "pinned": req.pinned}
-
-@app.get("/sessions/pinned")
-async def get_pinned():
-    """Get list of pinned session IDs."""
-    return {"pinned": list(_pinned_sessions)}
 
 # ─── File Explorer ───────────────────────────────────────────────
 @app.get("/files/tree")

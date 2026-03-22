@@ -39,14 +39,9 @@ export default function AppBar({ ollamaOk, modelCount, sessionCount, onGlobalSea
     return () => clearInterval(interval);
   }, []);
 
-  // ⌘K shortcut
+  // Escape handler
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-        e.preventDefault();
-        searchRef.current?.focus();
-        setSearchFocused(true);
-      }
       if (e.key === 'Escape') {
         setSearchFocused(false);
         setNotifOpen(false);
@@ -188,6 +183,20 @@ export default function AppBar({ ollamaOk, modelCount, sessionCount, onGlobalSea
         <span className="status-text"><b>{modelCount}</b> models</span>
         <span className="status-text">{sessionCount} sessions</span>
         <span className="status-text" style={{ opacity: 0.5 }}>{time}</span>
+
+        {/* Theme Toggle */}
+        <button
+          className="notif-btn"
+          onClick={() => {
+            const html = document.documentElement;
+            const current = html.getAttribute('data-theme');
+            html.setAttribute('data-theme', current === 'light' ? 'dark' : 'light');
+          }}
+          aria-label="Toggle theme"
+          title="Toggle Light/Dark Mode"
+        >
+          🌗
+        </button>
 
         {/* Notifications */}
         <div style={{ position: 'relative' }}>
