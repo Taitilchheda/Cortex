@@ -14,6 +14,7 @@ import asyncio
 import subprocess
 import shutil
 import sqlite3
+import uuid
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, UploadFile, File, Request, HTTPException, BackgroundTasks, WebSocket, Form
@@ -24,7 +25,8 @@ from api.state import (
     init_db, create_session, get_session, list_sessions, 
     delete_session, clear_all_sessions, add_event, update_session_title, search_sessions,
     index_project_file, search_project_context, clear_project_index,
-    set_session_pinned, list_pinned_sessions
+    set_session_pinned, list_pinned_sessions,
+    set_preference, get_preference, list_preferences
 )
 from api.memory import init_memory_db
 from config.models import (
@@ -42,6 +44,9 @@ from agents.orchestrator import (
 async def lifespan(app: FastAPI):
     await init_db()
     await init_memory_db()
+    persisted = await get_preference("agent_settings", None)
+    if isinstance(persisted, dict):
+        _agent_settings.update(persisted)
     yield
 
 app = FastAPI(
@@ -50,6 +55,16 @@ app = FastAPI(
     version="5.0.0",
     lifespan=lifespan,
 )
+
+@app.middleware("http")
+async def request_observability(request: Request, call_next):
+    """Attach request IDs and timing headers for local observability."""
+    req_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    start = time.time()
+    response = await call_next(request)
+    response.headers["x-request-id"] = req_id
+    response.headers["x-process-time-ms"] = str(int((time.time() - start) * 1000))
+    return response
 
 # ─── CORS ─────────────────────────────────────────────────────────
 app.add_middleware(
@@ -103,6 +118,7 @@ class AgentSettingsRequest(BaseModel):
     test_on_build: bool = False
     context_limit: int = 32768
     local_only: bool = False
+    protected_paths: List[str] = Field(default_factory=list)
 
 class FeedbackRequest(BaseModel):
     message_id: str
@@ -130,6 +146,15 @@ class GitCommitRequest(BaseModel):
     path: str
     message: str
 
+class PreferenceUpdateRequest(BaseModel):
+    key: str
+    value: Any
+
+class QueueTaskRequest(BaseModel):
+    task: str
+    mode: str = "chat"
+    project_path: Optional[str] = None
+
 # ─── In-Memory Stores ────────────────────────────────────────────
 _agent_settings = {
     "auto_approve": "ask",
@@ -140,8 +165,10 @@ _agent_settings = {
     "test_on_build": False,
     "context_limit": 32768,
     "local_only": False,
+    "protected_paths": [],
 }
 _notifications: list = []
+_task_queue: list = []
 
 # ─── SSE Helper ──────────────────────────────────────────────────
 def sse_format(event_type: str, data: dict) -> str:
@@ -221,6 +248,8 @@ async def health_features():
             "web_search": True,
             "git": shutil.which("git") is not None,
             "local_only": _agent_settings.get("local_only", False),
+            "queue": True,
+            "preferences": True,
             "ollama_connected": (await check_ollama_health()).get("status") == "connected",
         },
     }
@@ -566,6 +595,10 @@ async def write_file(req: FileWriteRequest):
     lowered = safe_path.lower()
     if "site-packages" in lowered or lowered.startswith("c:\\windows"):
         raise HTTPException(status_code=400, detail="Unsafe write path")
+    protected_paths = _agent_settings.get("protected_paths", [])
+    for p in protected_paths:
+        if p and lowered.startswith(os.path.abspath(p).lower()):
+            raise HTTPException(status_code=403, detail=f"Path is protected by policy: {p}")
 
     os.makedirs(os.path.dirname(safe_path), exist_ok=True)
     with open(safe_path, "w", encoding="utf-8") as f:
@@ -583,13 +616,72 @@ async def update_agent_settings(req: AgentSettingsRequest):
     """Update agent behaviour settings."""
     global _agent_settings
     _agent_settings = req.model_dump()
+    await set_preference("agent_settings", _agent_settings)
     return _agent_settings
 
 @app.post("/settings/tools")
 async def update_tool_config(req: ToolConfigRequest):
     """Configure which tools the agent can access"""
     _agent_settings["enabled_tools"] = req.tools
+    await set_preference("enabled_tools", req.tools)
     return {"status": "success", "tools_configured": len(req.tools)}
+
+@app.get("/settings/preferences")
+async def get_preferences():
+    """Return all persisted preferences."""
+    return {"preferences": await list_preferences()}
+
+@app.post("/settings/preferences")
+async def set_preferences(req: PreferenceUpdateRequest):
+    """Persist a preference value."""
+    await set_preference(req.key, req.value)
+    return {"status": "ok", "key": req.key}
+
+@app.get("/tools/registry")
+async def tools_registry():
+    """Discover available tool capabilities and current enablement."""
+    available = [
+        {"key": "web_search", "name": "Web Search", "enabled": True},
+        {"key": "rag_index", "name": "Project Index", "enabled": True},
+        {"key": "code_review", "name": "Code Review", "enabled": True},
+        {"key": "git_ops", "name": "Git Operations", "enabled": True},
+    ]
+    configured = _agent_settings.get("enabled_tools", [])
+    if isinstance(configured, list) and configured:
+        keys = {t if isinstance(t, str) else t.get("key") for t in configured}
+        for tool in available:
+            tool["enabled"] = tool["key"] in keys
+    return {"tools": available}
+
+@app.get("/queue")
+async def queue_list():
+    """List queued tasks."""
+    return {"tasks": _task_queue}
+
+@app.post("/queue")
+async def queue_add(req: QueueTaskRequest):
+    """Add a task to the background queue."""
+    task_id = str(uuid.uuid4())
+    entry = {
+        "id": task_id,
+        "task": req.task,
+        "mode": req.mode,
+        "project_path": req.project_path,
+        "status": "pending",
+        "created_at": time.time(),
+    }
+    _task_queue.append(entry)
+    return {"status": "queued", "task": entry}
+
+@app.delete("/queue/{task_id}")
+async def queue_delete(task_id: str):
+    """Delete/cancel a pending queued task."""
+    global _task_queue
+    before = len(_task_queue)
+    _task_queue = [t for t in _task_queue if t.get("id") != task_id]
+    if len(_task_queue) == before:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"status": "deleted", "task_id": task_id}
 
 @app.get("/git/status")
 async def git_status(path: str):

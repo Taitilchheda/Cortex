@@ -12,6 +12,20 @@ from typing import Dict, List, Optional, Any
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "mission_control.db")
 
+
+async def _ensure_preferences_table(db: aiosqlite.Connection) -> None:
+    """Create preferences table if missing for backward compatibility."""
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS preferences (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        """
+    )
+    await db.commit()
+
 async def init_db():
     """Initialize SQLite database with sessions and events tables."""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -45,6 +59,13 @@ async def init_db():
                 data TEXT NOT NULL,
                 timestamp REAL NOT NULL,
                 FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS preferences (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at REAL NOT NULL
             )
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id)")
@@ -293,6 +314,42 @@ async def list_pinned_sessions() -> List[str]:
             try:
                 await db.execute("ALTER TABLE sessions ADD COLUMN pinned INTEGER DEFAULT 0")
                 await db.commit()
-                return []
             except aiosqlite.Error:
-                return []
+                pass
+            return []
+
+async def set_preference(key: str, value: Any) -> None:
+    """Store a JSON-serializable preference value."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await _ensure_preferences_table(db)
+        await db.execute(
+            "INSERT OR REPLACE INTO preferences (key, value, updated_at) VALUES (?, ?, ?)",
+            (key, json.dumps(value), time.time()),
+        )
+        await db.commit()
+
+async def get_preference(key: str, default: Any = None) -> Any:
+    """Read a preference by key, returning default when missing."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await _ensure_preferences_table(db)
+        cursor = await db.execute("SELECT value FROM preferences WHERE key = ?", (key,))
+        row = await cursor.fetchone()
+        if not row:
+            return default
+        try:
+            return json.loads(row[0])
+        except Exception:
+            return default
+
+async def list_preferences() -> Dict[str, Any]:
+    """Return all stored preferences as a key-value map."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await _ensure_preferences_table(db)
+        cursor = await db.execute("SELECT key, value FROM preferences")
+        prefs: Dict[str, Any] = {}
+        async for row in cursor:
+            try:
+                prefs[row[0]] = json.loads(row[1])
+            except Exception:
+                prefs[row[0]] = row[1]
+        return prefs
