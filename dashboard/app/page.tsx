@@ -3,19 +3,44 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import AppBar from './components/Header';
 import LeftPanel from './components/Sidebar';
 import MessageBubble from './components/MessageBubble';
+import Breadcrumbs from './components/Breadcrumbs';
+import CodeEditor from './components/CodeEditor';
 import CommandBar from './components/InputBar';
 import AgentOutput from './components/AgentOutput';
 import RightPanel from './components/RightPanel';
 import CommandPalette from './components/CommandPalette';
+import ShortcutsModal from './components/ShortcutsModal';
 import {
   ChatMessage, Session, BuildEvent, AgentMode, ChatRole, FileAttachment
 } from './lib/types';
 import {
-  streamFetch, fetchHealth, fetchSessions, fetchSession,
-  deleteSession, clearSessions, pinSession, fetchPinned
+  streamFetch, 
+  fetchHealth, 
+  fetchSessions, 
+  fetchSession,
+  deleteSession, 
+  clearSessions, 
+  pinSession, 
+  fetchPinned,
+  fetchFileTree, 
+  readFile, 
+  fetchAgentSettings
 } from './lib/api';
 import { uid } from './lib/utils';
+import {
+  Cpu,
+  MessageSquare,
+  Zap,
+  Hammer,
+  AlertCircle,
+  X,
+  History as HistoryIcon,
+  Files,
+  Plus,
+  GitBranch
+} from 'lucide-react';
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from 'react-resizable-panels';
+import { toast } from 'sonner';
 
 export default function Cortex() {
   // ─── Core State ───────────────────────────────────────────────
@@ -24,7 +49,8 @@ export default function Cortex() {
   const [activeSession, setActiveSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [ollamaOk, setOllamaOk] = useState(false);
+  const [ollamaOk, setOllamaOk] = useState(true);
+  const [selfHealEnabled, setSelfHealEnabled] = useState(false);
   const [modelCount, setModelCount] = useState(0);
 
   // ─── Build State ──────────────────────────────────────────────
@@ -44,8 +70,16 @@ export default function Cortex() {
   const [searchQuery, setSearchQuery] = useState('');
   const [contextTokens, setContextTokens] = useState(0);
   const [contextLimit, setContextLimit] = useState(32768);
-  const [filePreview, setFilePreview] = useState<{ path: string; content: string } | null>(null);
+  const [openTabs, setOpenTabs] = useState<{ path: string; content: string }[]>([]);
+  const [activeTabIdx, setActiveTabIdx] = useState(-1);
+
+  const activeFile = useMemo(() => openTabs[activeTabIdx] || null, [openTabs, activeTabIdx]);
   const [defaultMode, setDefaultMode] = useState<AgentMode>('chat');
+  const [isMobile, setIsMobile] = useState(false);
+  const [mobileSection, setMobileSection] = useState<'nav' | 'workspace' | 'insight'>('workspace');
+  const [activeTab, setActiveTab] = useState<'sessions' | 'files' | 'agent' | 'git'>('sessions');
+  const [sidebarWidth, setSidebarWidth] = useState(280);
+  const [sidebarVisible, setSidebarVisible] = useState(true);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -66,9 +100,32 @@ export default function Cortex() {
 
   // ─── Load Sessions + Pinned ───────────────────────────────────
   useEffect(() => {
-    loadSessions();
+    const init = async () => {
+      loadSessions();
+      try {
+        const setts = await fetchAgentSettings();
+        setSelfHealEnabled(setts.test_on_build || false);
+      } catch {}
+    };
+    init();
     fetchPinned().then(d => setPinnedIds(new Set(d.pinned || []))).catch(() => {});
   }, []);
+
+  // Auto-index project when path changes
+  useEffect(() => {
+    if (lastBuildPath && lastBuildPath.length > 3) {
+      const timer = setTimeout(async () => {
+        try {
+          await fetch('/project/index', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ project_path: lastBuildPath })
+          });
+        } catch {}
+      }, 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [lastBuildPath]);
 
   const loadSessions = async () => {
     try {
@@ -84,16 +141,21 @@ export default function Cortex() {
     }
   }, [messages]);
 
+  // ─── Responsive check ───────────────────────────────────────────────────────
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth <= 1100);
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   // ─── Select Session (load full history) ──────────────────────
   const handleSelect = async (id: string) => {
     setActiveSessionId(id);
     setShowAgent(false);
     setBuildEvents([]);
-    setArchitectText('');
-    setFileCount(0);
-    setDoneFiles(0);
-    setTotalFiles(0);
-    setFilePreview(null);
+    setOpenTabs([]);
+    setActiveTabIdx(-1);
     setBuildComplete(false);
     setMessages([]);
 
@@ -165,20 +227,21 @@ export default function Cortex() {
     setDoneFiles(0);
     setTotalFiles(0);
     setContextTokens(0);
-    setFilePreview(null);
+    setOpenTabs([]);
+    setActiveTabIdx(-1);
     setBuildComplete(false);
   };
 
   // ─── Delete / Clear ───────────────────────────────────────────
   const handleDelete = async (id: string) => {
-    try { await deleteSession(id); } catch {}
+    try { await deleteSession(id); toast.success('Session deleted', { description: 'The session has been removed permanently.' }); } catch {}
     setSessions(prev => prev.filter(s => s.id !== id));
     if (id === activeSessionId) handleNew();
   };
 
   const handleClearAll = async () => {
     if (!confirm('Delete ALL sessions? This cannot be undone.')) return;
-    try { await clearSessions(); } catch {}
+    try { await clearSessions(); toast.success('All sessions cleared', { description: 'Your history is now clean.' }); } catch {}
     setSessions([]);
     handleNew();
   };
@@ -192,13 +255,34 @@ export default function Cortex() {
       newPinned ? next.add(id) : next.delete(id);
       return next;
     });
+    toast.success(newPinned ? 'Session pinned' : 'Session unpinned');
   };
 
-  // ─── File Preview ─────────────────────────────────────────────
+  // ─── File Preview (Tabs) ─────────────────────────────────────────────
   const handleFileSelect = (path: string, content: string) => {
-    setFilePreview({ path, content });
+    setOpenTabs(prev => {
+      const existing = prev.findIndex(t => t.path === path);
+      if (existing !== -1) {
+        setActiveTabIdx(existing);
+        return prev;
+      }
+      const next = [...prev, { path, content }];
+      setActiveTabIdx(next.length - 1);
+      return next;
+    });
     setShowAgent(false);
     setMessages([]);
+  };
+
+  const closeTab = (e: React.MouseEvent, idx: number) => {
+    e.stopPropagation();
+    const next = openTabs.filter((_, i) => i !== idx);
+    setOpenTabs(next);
+    if (activeTabIdx === idx) {
+      setActiveTabIdx(next.length - 1);
+    } else if (activeTabIdx > idx) {
+      setActiveTabIdx(activeTabIdx - 1);
+    }
   };
 
   // ─── Global Search ────────────────────────────────────────────
@@ -255,6 +339,7 @@ export default function Cortex() {
     if (abortRef.current) {
       abortRef.current.abort();
       setIsStreaming(false);
+      toast.info('Agent stopped manually.');
     }
   }, []);
 
@@ -263,8 +348,16 @@ export default function Cortex() {
     text: string, mode: AgentMode, role: ChatRole, projectPath: string,
     attachments: FileAttachment[], selfHeal: boolean
   ) => {
-    if (isStreaming) return;
-    setFilePreview(null);
+    if (!ollamaOk) {
+      toast.error('Ollama is not responding', { description: 'Please make sure Ollama is running locally.' });
+      return;
+    }
+    if (isStreaming) {
+      toast.warning('Agent is already running', { description: 'Please wait, or stop the current generator.' });
+      return;
+    }
+    setOpenTabs([]);
+    setActiveTabIdx(-1);
     setBuildComplete(false);
 
     // ─── CHAT MODE ──────────────────────────────────────────────
@@ -454,6 +547,7 @@ export default function Cortex() {
   // ─── Render ───────────────────────────────────────────────────
   return (
     <div className="app-shell" id="app-shell">
+      <ShortcutsModal />
       <CommandPalette
         sessions={sessions}
         onSelectSession={handleSelect}
@@ -461,16 +555,65 @@ export default function Cortex() {
         onClearAll={handleClearAll}
         onGlobalSearch={handleGlobalSearch}
       />
-      <AppBar
-        ollamaOk={ollamaOk}
-        modelCount={modelCount}
+      <AppBar 
+        ollamaOk={ollamaOk} 
+        modelCount={modelCount} 
         sessionCount={sessions.length}
         onGlobalSearch={handleGlobalSearch}
         sessions={sessions}
+        activeSession={activeSession}
+        activeFile={activeFile?.path || null}
       />
 
-      <PanelGroup orientation="horizontal" className="main-panels-group" id="cortex-panels">
-        <Panel defaultSize={20} minSize={15} maxSize={40} className="panel-container">
+      <div className="main-content-area" id="cortex-panels">
+        {/* Activity Bar (VS Code style) */}
+        {!isMobile && (
+          <div className="activity-bar">
+            <button 
+              className={`act-btn ${activeTab === 'sessions' ? 'active' : ''}`} 
+              onClick={() => { setActiveTab('sessions'); setSidebarVisible(true); }}
+              title="Sessions (Ctrl+Shift+H)"
+            >
+              <HistoryIcon size={20} />
+            </button>
+            <button 
+              className={`act-btn ${activeTab === 'files' ? 'active' : ''}`} 
+              onClick={() => { setActiveTab('files'); setSidebarVisible(true); }}
+              title="Files (Ctrl+Shift+E)"
+            >
+              <Files size={20} />
+            </button>
+            <button 
+              className={`act-btn ${activeTab === 'agent' ? 'active' : ''}`} 
+              onClick={() => { setActiveTab('agent'); setSidebarVisible(true); }}
+              title="Agent Status"
+            >
+              <Cpu size={20} />
+            </button>
+            <button 
+              className={`act-btn ${activeTab === 'git' ? 'active' : ''}`} 
+              onClick={() => { setActiveTab('git'); setSidebarVisible(true); }}
+              title="Git History (Ctrl+Shift+G)"
+            >
+              <GitBranch size={20} />
+            </button>
+            <div style={{ flex: 1 }} />
+            <button className="act-btn" onClick={handleNew} title="New Session (Ctrl+Shift+N)" style={{ color: 'var(--accent)', marginBottom: 12 }}>
+               <Plus size={20} />
+            </button>
+            <button className="act-btn" onClick={() => setSidebarVisible(!sidebarVisible)} title="Toggle Sidebar (Ctrl+B)">
+               <X size={18} style={{ transform: sidebarVisible ? 'none' : 'rotate(45deg)' }} />
+            </button>
+          </div>
+        )}
+
+        <div 
+          className="panel-container sidebar-left" 
+          style={{
+            display: (isMobile && mobileSection !== 'nav') || !sidebarVisible ? 'none' : 'flex',
+            width: sidebarWidth,
+          }}
+        >
           <LeftPanel
             sessions={sessions}
             activeSessionId={activeSessionId}
@@ -482,89 +625,86 @@ export default function Cortex() {
             onTogglePin={handleTogglePin}
             onFileSelect={handleFileSelect}
             searchQuery={searchQuery}
+            activeTab={activeTab}
           />
-        </Panel>
+        </div>
 
-        <PanelResizeHandle className="panel-resizer" />
-
-        <Panel defaultSize={60} minSize={30} className="panel-container" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <div 
+          className="panel-container workspace-center" 
+          style={{ display: isMobile && mobileSection !== 'workspace' ? 'none' : 'flex' }}
+        >
           <div className="workspace" id="workspace">
-        {/* ── File Preview ── */}
-        {filePreview ? (
-          <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--cyan)' }}>{filePreview.path}</div>
-              <button className="btn btn--sm" onClick={() => setFilePreview(null)}>✕ Close</button>
-            </div>
-            <div className="code-wrap">
-              <div className="code-bar">
-                <span className="code-lang">{filePreview.path.split('.').pop()}</span>
-                <button className="code-copy" onClick={() => navigator.clipboard.writeText(filePreview.content)}>📋 Copy</button>
+            {/* ── Editor Tabs ── */}
+            {openTabs.length > 0 && !showAgent && (
+              <div className="editor-tabs">
+                {openTabs.map((t, i) => (
+                  <div 
+                    key={t.path} 
+                    className={`editor-tab ${activeTabIdx === i ? 'active' : ''}`}
+                    onClick={() => setActiveTabIdx(i)}
+                  >
+                    <span className="tab-name">{t.path.split(/[\\\/]/).pop()}</span>
+                    <button className="tab-close" onClick={(e) => closeTab(e, i)}><X size={10} /></button>
+                  </div>
+                ))}
               </div>
-              <pre className="code-body">{filePreview.content}</pre>
-            </div>
-          </div>
+            )}
 
-        /* ── Agent Output (Build/Refactor) ── */
-        ) : showAgent ? (
-          <AgentOutput
-            events={buildEvents}
-            architectText={architectText}
-            isRunning={isStreaming}
-            totalFiles={totalFiles}
-            doneFiles={doneFiles}
-            startTime={buildStartTime}
-            buildComplete={buildComplete}
-            onContinue={handleContinueBuild}
-            onRevert={handleRevertBuild}
-            projectPath={lastBuildPath}
-          />
-
-        /* ── Chat Messages ── */
-        ) : messages.length > 0 ? (
-          <div className="chat-scroll" id="chat-container">
-            {messages.map(msg => <MessageBubble key={msg.id} message={msg} />)}
-            <div ref={chatEndRef} />
-          </div>
-
-        /* ── Empty State ── */
-        ) : (
-          <div className="ws-empty" id="empty-state">
-            <div className="ws-empty__icon">🚀</div>
-            <div className="ws-empty__title">Cortex</div>
-            <div className="ws-empty__desc">
-              Your local AI coding agent. Chat with models, build entire projects,
-              refactor codebases — all 100% on-device via Ollama.
-            </div>
-            <div className="ws-empty__cards">
-              <div className="ws-mode-card" onClick={() => handleModeCardClick('chat')} id="mode-card-chat">
-                <div className="ws-mode-card__icon">💬</div>
-                <div className="ws-mode-card__name">Chat</div>
-                <div className="ws-mode-card__desc">Ask anything, debug code</div>
+            {activeFile && !showAgent ? (
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                <CodeEditor value={activeFile.content} path={activeFile.path} />
               </div>
-              <div className="ws-mode-card" onClick={() => handleModeCardClick('build')} id="mode-card-build">
-                <div className="ws-mode-card__icon">⚡</div>
-                <div className="ws-mode-card__name">Build</div>
-                <div className="ws-mode-card__desc">Generate full projects</div>
+            ) : showAgent ? (
+              <AgentOutput
+                events={buildEvents}
+                architectText={architectText}
+                isRunning={isStreaming}
+                totalFiles={totalFiles}
+                doneFiles={doneFiles}
+                startTime={buildStartTime}
+                buildComplete={buildComplete}
+                onContinue={handleContinueBuild}
+                onRevert={handleRevertBuild}
+                projectPath={lastBuildPath}
+              />
+            ) : messages.length > 0 ? (
+              <div className="chat-scroll" id="chat-container">
+                {messages.map(msg => <MessageBubble key={msg.id} message={msg} />)}
+                <div ref={chatEndRef} />
               </div>
-              <div className="ws-mode-card" onClick={() => handleModeCardClick('refactor')} id="mode-card-refactor">
-                <div className="ws-mode-card__icon">🔧</div>
-                <div className="ws-mode-card__name">Refactor</div>
-                <div className="ws-mode-card__desc">Bulk edit via aider</div>
-              </div>
-            </div>
-            {!ollamaOk && (
-              <div style={{
-                marginTop: 20, padding: '10px 18px', borderRadius: 'var(--radius)',
-                background: 'var(--amber-dim)', border: '1px solid rgba(245,158,11,0.2)',
-                fontSize: 12, color: 'var(--amber)', maxWidth: 440, textAlign: 'center',
-              }}>
-                ⚠ Ollama not detected. Start it with <code className="inline-code">ollama serve</code> then pull a model with <code className="inline-code">ollama pull deepseek-coder-v2:16b</code>
+            ) : (
+              <div className="ws-empty" id="empty-state">
+                <div className="pro-logo-large">
+                   <Cpu size={48} color="var(--accent)" />
+                </div>
+                <div className="ws-empty__title">Cortex Pro</div>
+                <div className="ws-empty__desc">
+                  The high-performance local AI coding environment. 
+                  Build, refactor, and chat with private models 100% on-device.
+                </div>
+                <div className="ws-empty__cards">
+                  <div className="pro-mode-card" onClick={() => handleModeCardClick('chat')} id="mode-card-chat">
+                    <MessageSquare size={20} className="icon-violet" />
+                    <span>Chat</span>
+                  </div>
+                  <div className="pro-mode-card" onClick={() => handleModeCardClick('build')} id="mode-card-build">
+                    <Zap size={20} className="icon-blue" />
+                    <span>Build</span>
+                  </div>
+                  <div className="pro-mode-card" onClick={() => handleModeCardClick('refactor')} id="mode-card-refactor">
+                    <Hammer size={20} className="icon-amber" />
+                    <span>Refactor</span>
+                  </div>
+                </div>
+                {!ollamaOk && (
+                  <div className="status-warning-box">
+                    <AlertCircle size={14} />
+                    <span>Ollama is not responding. Ensure it's running on port 11434.</span>
+                  </div>
+                )}
               </div>
             )}
           </div>
-        )}
-      </div>
 
           <CommandBar
             onSend={handleSend}
@@ -574,11 +714,12 @@ export default function Cortex() {
             contextLimit={contextLimit}
             defaultMode={defaultMode}
           />
-        </Panel>
+        </div>
 
-        <PanelResizeHandle className="panel-resizer" />
-
-        <Panel defaultSize={20} minSize={15} maxSize={40} className="panel-container">
+        <div 
+          className="panel-container sidebar-right" 
+          style={isMobile && mobileSection !== 'insight' ? { display: 'none' } : undefined}
+        >
           <RightPanel
             activeSession={activeSession}
             fileCount={fileCount}
@@ -588,8 +729,22 @@ export default function Cortex() {
             contextTokens={contextTokens}
             contextLimit={contextLimit}
           />
-        </Panel>
-      </PanelGroup>
+        </div>
+      </div>
+
+      {isMobile && (
+        <div className="mobile-nav" role="tablist" aria-label="Mobile workspace switcher">
+          <button className={mobileSection === 'nav' ? 'active' : ''} onClick={() => setMobileSection('nav')}>
+            Sessions
+          </button>
+          <button className={mobileSection === 'workspace' ? 'active' : ''} onClick={() => setMobileSection('workspace')}>
+            Workspace
+          </button>
+          <button className={mobileSection === 'insight' ? 'active' : ''} onClick={() => setMobileSection('insight')}>
+            Insights
+          </button>
+        </div>
+      )}
 
       {/* Agent Status Bar */}
       <div className="agent-strip" id="agent-strip" role="status" aria-label="Active agents" style={{ position: 'fixed', bottom: 16, right: 350, zIndex: 100 }}>

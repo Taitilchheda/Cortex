@@ -2,6 +2,19 @@
 import { useState, useEffect, useRef } from 'react';
 import { Notification, Session } from '../lib/types';
 import { fetchNotifications, clearNotifications } from '../lib/api';
+import { 
+  Bell, 
+  Search, 
+  Moon, 
+  Sun, 
+  Monitor, 
+  Command, 
+  CheckCircle2, 
+  AlertCircle,
+  Activity,
+  Layers,
+  Cpu
+} from 'lucide-react';
 
 interface AppBarProps {
   ollamaOk: boolean;
@@ -9,9 +22,16 @@ interface AppBarProps {
   sessionCount: number;
   onGlobalSearch: (query: string) => void;
   sessions?: Session[];
+  activeSession?: Session | null;
+  activeFile?: string | null;
 }
 
-export default function AppBar({ ollamaOk, modelCount, sessionCount, onGlobalSearch, sessions = [] }: AppBarProps) {
+import { ChevronRight, Folder } from 'lucide-react';
+
+export default function AppBar({ 
+  ollamaOk, modelCount, sessionCount, onGlobalSearch, sessions = [], 
+  activeSession, activeFile 
+}: AppBarProps) {
   const [time, setTime] = useState('');
   const [searchVal, setSearchVal] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
@@ -26,40 +46,17 @@ export default function AppBar({ ollamaOk, modelCount, sessionCount, onGlobalSea
     return () => clearInterval(interval);
   }, []);
 
-  // Poll notifications
   useEffect(() => {
     const poll = async () => {
       try {
         const data = await fetchNotifications();
         setNotifs(data.notifications || []);
-      } catch { /* backend may be offline */ }
+      } catch { /* ignore */ }
     };
     poll();
     const interval = setInterval(poll, 10000);
     return () => clearInterval(interval);
   }, []);
-
-  // Escape handler
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setSearchFocused(false);
-        setNotifOpen(false);
-        searchRef.current?.blur();
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, []);
-
-  // Search suggestions based on existing sessions
-  const searchSuggestions = searchFocused && searchVal.length > 0
-    ? sessions.filter(s =>
-        (s.title || '').toLowerCase().includes(searchVal.toLowerCase()) ||
-        s.type.includes(searchVal.toLowerCase()) ||
-        (s.project_path || '').toLowerCase().includes(searchVal.toLowerCase())
-      ).slice(0, 5)
-    : [];
 
   const handleSearchSubmit = () => {
     if (searchVal.trim()) {
@@ -72,23 +69,42 @@ export default function AppBar({ ollamaOk, modelCount, sessionCount, onGlobalSea
 
   return (
     <div className="app-bar" id="app-bar">
-      {/* Brand */}
-      <div className="app-bar__brand">
-        <div className="app-bar__logo" aria-label="Cortex logo">🚀</div>
-        <span className="app-bar__title">Cortex</span>
-        <span className="app-bar__ver">v5.0</span>
+      {/* Brand & Breadcrumbs */}
+      <div className="app-bar__brand-group">
+        <div className="app-bar__brand">
+          <div className="app-bar__logo" aria-label="Cortex logo">
+            <Cpu size={18} color="#fff" />
+          </div>
+          <span className="app-bar__title">Cortex Pro</span>
+        </div>
+        
+        <div className="app-bar__divider" />
+        
+        <div className="app-bar__breadcrumbs">
+          <ChevronRight size={14} className="bc-sep" />
+          <span className="bc-item bc-session">
+            {activeSession ? (activeSession.title || 'Untitled Session') : 'Welcome'}
+          </span>
+          {activeFile && (
+            <>
+              <ChevronRight size={14} className="bc-sep" />
+              <Folder size={12} className="bc-icon" />
+              <span className="bc-item bc-file">{activeFile.split(/[/\\]/).pop()}</span>
+            </>
+          )}
+        </div>
       </div>
 
-      {/* Global Search with Suggestions */}
-      <div style={{ position: 'relative', flex: '0 1 360px' }}>
-        <div className="app-bar__search"
+      {/* Global Search */}
+      <div className="app-bar__search-container">
+        <div className={`app-bar__search ${searchFocused ? 'focused' : ''}`}
           onClick={() => { searchRef.current?.focus(); setSearchFocused(true); }}
           id="global-search"
         >
-          <span style={{ fontSize: 13, color: 'var(--text-4)' }}>🔍</span>
+          <Search size={14} className="search-icon" />
           <input
             ref={searchRef}
-            placeholder="Search sessions, files, prompts..."
+            placeholder="Search everything..."
             value={searchVal}
             onChange={e => setSearchVal(e.target.value)}
             onKeyDown={e => {
@@ -99,155 +115,84 @@ export default function AppBar({ ollamaOk, modelCount, sessionCount, onGlobalSea
             onBlur={() => setTimeout(() => setSearchFocused(false), 200)}
             aria-label="Global search"
           />
-          <kbd>⌘K</kbd>
+          <div className="kbd-hint">
+             <Command size={10} />
+             <span>K</span>
+          </div>
         </div>
-
-        {/* Search suggestions dropdown */}
-        {searchSuggestions.length > 0 && (
-          <div style={{
-            position: 'absolute', top: '100%', left: 0, right: 0,
-            background: 'var(--bg-surface)', border: '1px solid var(--border)',
-            borderRadius: 'var(--radius)', marginTop: 4,
-            boxShadow: '0 8px 30px rgba(0,0,0,0.5)', zIndex: 300,
-            overflow: 'hidden',
-          }}>
-            <div style={{ padding: '6px 10px', fontSize: 10, fontWeight: 700, color: 'var(--text-4)', textTransform: 'uppercase', borderBottom: '1px solid var(--border)' }}>
-              Matching Sessions
-            </div>
-            {searchSuggestions.map(s => (
-              <div key={s.id} style={{
-                padding: '8px 12px', cursor: 'pointer', fontSize: 12,
-                display: 'flex', alignItems: 'center', gap: 8,
-                transition: 'background 0.15s',
-              }}
-              onClick={() => {
-                onGlobalSearch(s.title || '');
-                setSearchVal('');
-                setSearchFocused(false);
-              }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                <span>{s.type === 'build' ? '⚡' : s.type === 'refactor' ? '🔧' : '💬'}</span>
-                <span style={{ flex: 1, color: 'var(--text-1)' }}>{s.title}</span>
-                <span style={{ fontSize: 10, color: 'var(--text-4)' }}>{s.type}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Contextual suggestions when empty */}
-        {searchFocused && !searchVal && sessions.length > 0 && (
-          <div style={{
-            position: 'absolute', top: '100%', left: 0, right: 0,
-            background: 'var(--bg-surface)', border: '1px solid var(--border)',
-            borderRadius: 'var(--radius)', marginTop: 4,
-            boxShadow: '0 8px 30px rgba(0,0,0,0.5)', zIndex: 300,
-          }}>
-            <div style={{ padding: '6px 10px', fontSize: 10, fontWeight: 700, color: 'var(--text-4)', textTransform: 'uppercase', borderBottom: '1px solid var(--border)' }}>
-              Recent Sessions
-            </div>
-            {sessions.slice(0, 5).map(s => (
-              <div key={s.id} style={{
-                padding: '8px 12px', cursor: 'pointer', fontSize: 12,
-                display: 'flex', alignItems: 'center', gap: 8,
-                transition: 'background 0.15s',
-              }}
-              onClick={() => {
-                onGlobalSearch(s.title || s.id);
-                setSearchFocused(false);
-              }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                <span>{s.type === 'build' ? '⚡' : s.type === 'refactor' ? '🔧' : '💬'}</span>
-                <span style={{ flex: 1, color: 'var(--text-2)' }}>{s.title}</span>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
 
-      {/* Status cluster */}
+      {/* Status & Actions */}
       <div className="app-bar__status">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <div
-            className={`status-ring ${ollamaOk ? 'status-ring--ok' : 'status-ring--err'}`}
-            style={{ color: ollamaOk ? 'var(--green)' : 'var(--red)' }}
-            role="status"
-            aria-label={ollamaOk ? 'Ollama connected' : 'Ollama disconnected'}
-          />
-          <span className="status-text" style={{ color: ollamaOk ? 'var(--green)' : 'var(--red)' }}>
-            {ollamaOk ? 'Connected' : 'Disconnected'}
+        <div className="status-badge">
+          {ollamaOk ? <CheckCircle2 size={12} color="var(--green)" /> : <AlertCircle size={12} color="var(--red)" />}
+          <span style={{ color: ollamaOk ? 'var(--green)' : 'var(--red)' }}>
+            {ollamaOk ? 'Ollama' : 'Offline'}
           </span>
         </div>
 
-        <span className="status-text"><b>{modelCount}</b> models</span>
-        <span className="status-text">{sessionCount} sessions</span>
-        <span className="status-text" style={{ opacity: 0.5 }}>{time}</span>
+        <div className="status-item">
+          <Layers size={14} />
+          <span>{modelCount}</span>
+        </div>
 
-        {/* Theme Toggle */}
+        <div className="status-item">
+          <Activity size={14} />
+          <span>{sessionCount}</span>
+        </div>
+
+        <div className="status-divider" />
+
         <button
-          className="notif-btn"
+          className="icon-btn"
           onClick={() => {
             const html = document.documentElement;
             const current = html.getAttribute('data-theme');
             html.setAttribute('data-theme', current === 'light' ? 'dark' : 'light');
           }}
           aria-label="Toggle theme"
-          title="Toggle Light/Dark Mode"
         >
-          🌗
+          <Moon size={16} />
         </button>
 
-        {/* Notifications */}
         <div style={{ position: 'relative' }}>
           <button
-            className="notif-btn"
+            className="icon-btn"
             onClick={() => setNotifOpen(!notifOpen)}
-            aria-label={`Notifications (${unread} unread)`}
             id="notif-btn"
           >
-            🔔
-            {unread > 0 && <span className="notif-badge">{unread}</span>}
+            <Bell size={16} />
+            {unread > 0 && <span className="notif-dot" />}
           </button>
 
           {notifOpen && (
-            <div style={{
-              position: 'absolute', top: '100%', right: 0, width: 300,
-              background: 'var(--bg-surface)', border: '1px solid var(--border)',
-              borderRadius: 'var(--radius-lg)', padding: 10,
-              boxShadow: '0 8px 30px rgba(0,0,0,0.5)', zIndex: 200,
-              maxHeight: 320, overflowY: 'auto',
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, alignItems: 'center' }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)' }}>Notifications</span>
+            <div className="notif-dropdown">
+              <div className="notif-header">
+                <span>Notifications</span>
                 {notifs.length > 0 && (
-                  <button className="btn btn--sm btn--danger" onClick={async () => {
+                  <button onClick={async () => {
                     await clearNotifications();
                     setNotifs([]);
                   }}>Clear</button>
                 )}
               </div>
-              {notifs.length === 0 ? (
-                <div style={{ fontSize: 12, color: 'var(--text-4)', textAlign: 'center', padding: 20 }}>
-                  No notifications yet
-                </div>
-              ) : (
-                notifs.slice().reverse().map(n => (
-                  <div key={n.id} style={{
-                    padding: 8, borderRadius: 6, marginBottom: 4,
-                    background: n.level === 'error' ? 'var(--red-dim)' :
-                      n.level === 'success' ? 'var(--green-dim)' :
-                        n.level === 'warning' ? 'var(--amber-dim)' : 'var(--bg-elevated)',
-                    fontSize: 11,
-                  }}>
-                    <div style={{ fontWeight: 600, color: 'var(--text-1)' }}>{n.title}</div>
-                    <div style={{ color: 'var(--text-3)', marginTop: 2 }}>{n.body}</div>
-                  </div>
-                ))
-              )}
+              <div className="notif-list">
+                {notifs.length === 0 ? (
+                  <div className="notif-empty">No new notifications</div>
+                ) : (
+                  notifs.slice().reverse().map(n => (
+                    <div key={n.id} className={`notif-item ${n.level}`}>
+                      <div className="notif-title">{n.title}</div>
+                      <div className="notif-body">{n.body}</div>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
           )}
         </div>
+        
+        <div className="time-display">{time}</div>
       </div>
     </div>
   );

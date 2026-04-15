@@ -11,7 +11,10 @@ import asyncio
 from typing import AsyncGenerator, Dict, Any, List, Optional
 from config.models import get_model_for_role, OLLAMA_BASE, MODEL_ROUTER
 from agents.file_writer import architect_phase, coder_phase, self_healing_build
-from api.state import add_event, create_session, update_session_title, update_token_usage
+from agents.reviewer import run_code_review
+from agents.web_search import get_web_context
+from api.memory import get_memory_context
+from api.state import add_event, create_session, update_session_title, update_token_usage, search_project_context
 
 # ─── Conversation Memory (Future Scope) ──────────────────────────
 # Multi-turn memory per session for build mode context
@@ -69,8 +72,17 @@ async def run_build(task: str, project_path: str, session_id: str, self_heal: bo
             yield event
     else:
         # Standard two-phase pipeline
+        # Fetch memory (Long-term)
+        memory_context = await get_memory_context(task)
+        if memory_context:
+            task = f"{memory_context}\n\nTarget Task: {task}"
+
+        # Fetch project context (RAG) for architect
+        project_context = await _get_project_context(session_id, task)
+        context_task = f"{project_context}\n\nTarget Task: {task}" if project_context else task
+        
         plan = None
-        async for event in architect_phase(task, project_path):
+        async for event in architect_phase(context_task, project_path):
             await add_event(session_id, event["type"], event["data"])
             yield event
             if event["type"] == "log" and event["data"].get("phase") == "architect_done":
@@ -84,8 +96,20 @@ async def run_build(task: str, project_path: str, session_id: str, self_heal: bo
             async for event in coder_phase(plan, project_path):
                 await add_event(session_id, event["type"], event["data"])
                 yield event
+            
+            # Extract changed files for review
+            changed_files = [f["path"] for f in plan.get("files", [])] if isinstance(plan, dict) else []
+            if not changed_files and isinstance(plan, list):
+                changed_files = [f["path"] for f in plan]
 
-            # Git auto-commit (Future Scope)
+            # Final Phase: Review (after build)
+            async for event in run_code_review(project_path, changed_files):
+                await add_event(session_id, event["type"], event["data"])
+                yield event
+
+            await add_event(session_id, "log", {"phase": "build_done", "message": "Build and review complete."})
+            
+            # Git auto-commit
             await _git_auto_commit(project_path, task)
 
 
@@ -109,7 +133,24 @@ async def run_chat(task: str, mode: str, session_id: str, attachments: list = No
                 images.append(att["data"])
             elif att.get("content"):
                 user_content += f"\n\n--- Attached: {att.get('name', 'file')} ---\n{att['content']}"
-    
+
+    # Process Search Intent (Web Search)
+    if any(kw in task.lower() for kw in ["search", "google", "web", "latest", "how to", "library"]):
+        yield {"type": "log", "data": {"phase": "web_search", "message": f"🌐 Proactively searching web for: {task}..."}}
+        web_context = await get_web_context(task)
+        if web_context:
+            user_content = f"{web_context}\n\nUser Question: {user_content}"
+            
+    # Fetch memory (Long-term)
+    memory_context = await get_memory_context(task)
+    if memory_context:
+        user_content = f"{memory_context}\n\nUser Question: {user_content}"
+        
+    # Fetch project context (RAG)
+    project_context = await _get_project_context(session_id, task)
+    if project_context:
+        user_content = f"{project_context}\n\nUser Question: {user_content}"
+
     messages.append({"role": "user", "content": user_content})
     
     add_to_conversation(session_id, "user", user_content)
@@ -254,14 +295,31 @@ def _get_system_prompt(mode: str) -> str:
     return prompts.get(mode, prompts["coder"])
 
 
+async def _get_project_context(session_id: str, query: str) -> str:
+    """Helper to fetch top relevant snippets from project index if a path exists."""
+    from api.state import get_session
+    session = await get_session(session_id)
+    if not session or not session.get("project_path"):
+        return ""
+    
+    project_path = session["project_path"]
+    results = await search_project_context(project_path, query, limit=3)
+    
+    if not results:
+        return ""
+        
+    context = "\n--- Project Context (Relevant Snippets) ---\n"
+    for r in results:
+        context += f"File: {r['path']}\nContent Snippet:\n{r['content'][:1000]}...\n\n"
+    return context + "--- End Context ---\n"
+
 async def _git_auto_commit(project_path: str, task_description: str) -> None:
-    """Future Scope: Git auto-commit after each completed build."""
+    """Git auto-commit after each completed build."""
     git_dir = os.path.join(project_path, ".git")
     if not os.path.exists(git_dir):
         return
     
     try:
-        # Generate a commit message
         model = get_model_for_role("quick")
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
@@ -274,10 +332,9 @@ async def _git_auto_commit(project_path: str, task_description: str) -> None:
                 },
             )
             commit_msg = resp.json().get("response", "Auto-commit by Cortex").strip()
-            # Clean up the message
             commit_msg = commit_msg.split('\n')[0][:72]
         
         subprocess.run(["git", "add", "."], cwd=project_path, capture_output=True, timeout=10)
         subprocess.run(["git", "commit", "-m", commit_msg], cwd=project_path, capture_output=True, timeout=10)
     except Exception:
-        pass  # Non-critical — don't fail the build
+        pass

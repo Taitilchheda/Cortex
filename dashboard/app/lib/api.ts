@@ -109,6 +109,7 @@ export const fetchBenchmarks = () => get('/benchmarks');
 // New endpoints per design doc
 export const pinSession = (id: string, pinned: boolean) => post(`/sessions/${id}/pin`, { pinned });
 export const fetchPinned = () => get('/sessions/pinned');
+export const searchSessions = (query: string) => get(`/sessions/search?q=${encodeURIComponent(query)}`);
 export const fetchFileTree = (path: string, depth = 3) => get(`/files/tree?path=${encodeURIComponent(path)}&depth=${depth}`);
 export const readFile = (path: string) => get(`/files/read?path=${encodeURIComponent(path)}`);
 export const fetchAgentSettings = () => get('/settings/agent');

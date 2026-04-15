@@ -1,7 +1,10 @@
 'use client';
 import { BuildEvent } from '../lib/types';
 import { formatBytes } from '../lib/utils';
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
+import Terminal from './Terminal';
+import DiffViewer from './DiffViewer';
+import { FileText, ChevronDown, ChevronRight, Eye } from 'lucide-react';
 
 interface AgentOutputProps {
   events: BuildEvent[];
@@ -21,6 +24,11 @@ export default function AgentOutput({
   buildComplete, onContinue, onRevert, projectPath
 }: AgentOutputProps) {
   const [expandedPhases, setExpandedPhases] = useState<Set<string>>(new Set(['architect', 'coder']));
+  const [showDiffMap, setShowDiffMap] = useState<Record<string, boolean>>({});
+
+  const toggleDiff = (path: string) => {
+    setShowDiffMap(prev => ({ ...prev, [path]: !prev[path] }));
+  };
 
   const fileEvents = events.filter(e => e.type === 'file_created');
   const logEvents = events.filter(e => e.type === 'log');
@@ -29,6 +37,12 @@ export default function AgentOutput({
   const healEvents = logEvents.filter(e => e.phase?.startsWith('self_heal'));
   const isDone = logEvents.some(e => e.phase === 'complete');
   const isCoding = logEvents.some(e => e.phase === 'coding');
+
+  const terminalLogs = useMemo(() => {
+    return events
+      .filter(e => e.type === 'log')
+      .map(e => e.message || '');
+  }, [events]);
 
   // Progress percentage
   const progress = totalFiles > 0 ? Math.round((doneFiles / totalFiles) * 100) : 0;
@@ -162,20 +176,39 @@ export default function AgentOutput({
                 </div>
               )}
 
+              {/* Terminal Output */}
+              <div style={{ height: 240, border: '1px solid var(--border)', borderTop: 'none' }}>
+                <Terminal logs={terminalLogs} />
+              </div>
+
               {/* Generated files list */}
               <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderTop: 'none', borderRadius: '0 0 var(--radius) var(--radius)' }}>
-                {logEvents.filter(e => e.phase === 'coding').map((e, i) => (
-                  <div key={`log-${i}`} style={{
-                    padding: '4px 14px', fontSize: 11, fontFamily: 'var(--font-mono)',
-                    color: 'var(--text-4)', borderBottom: '1px solid var(--border)',
-                  }}>{e.message}</div>
-                ))}
-
                 {fileEvents.map((e, i) => (
-                  <div key={`file-${i}`} className="file-row">
-                    <span className="file-row__icon">✅</span>
-                    <span className="file-row__path">{e.rel_path || e.path}</span>
-                    <span className="file-row__size">{formatBytes(e.size || 0)}</span>
+                  <div key={`file-${i}`} className="file-col">
+                    <div className="file-row">
+                      <span className="file-row__icon">✅</span>
+                      <span className="file-row__path">{e.rel_path || e.path}</span>
+                      <span className="file-row__size">{formatBytes(e.size || 0)}</span>
+                      {e.old_content && (
+                        <button 
+                          className={`diff-toggle-btn ${showDiffMap[e.path!] ? 'active' : ''}`}
+                          onClick={() => toggleDiff(e.path!)}
+                          title="View Differential"
+                        >
+                          <Eye size={12} />
+                          <span>{showDiffMap[e.path!] ? 'Hide Diff' : 'See Diff'}</span>
+                        </button>
+                      )}
+                    </div>
+                    {showDiffMap[e.path!] && e.old_content && (
+                      <div className="inline-diff">
+                        <DiffViewer 
+                          oldCode={e.old_content} 
+                          newCode={e.new_content || ''} 
+                          fileName={e.rel_path || e.path || ''} 
+                        />
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

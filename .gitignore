@@ -70,3 +70,12 @@ implementation_plan.md
 research_notes.md
 experiment_results.md
 analysis_results.md
+
+cortex_implementation_log.md
+cortex_implementation_log.md.resolved
+ui_redesign_plan.md
+
+# Database Files
+server/mission_control.db
+server/data/*.db
+server/data/*.sqlite

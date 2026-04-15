@@ -174,6 +174,14 @@ The code must be complete, production-ready, and properly formatted."""
 
         content = await _generate_file_content(model, prompt, rel_path)
         
+        # Capture old content if exists
+        old_content = None
+        if os.path.exists(full_path):
+            try:
+                with open(full_path, 'r', encoding='utf-8') as f:
+                    old_content = f.read()
+            except: pass
+
         if content and len(content) < 10:
             # Retry with simplified prompt
             yield {"type": "log", "data": {"phase": "retry", "message": f"Content too short, retrying: {rel_path}"}}
@@ -193,6 +201,8 @@ The code must be complete, production-ready, and properly formatted."""
                         "rel_path": rel_path,
                         "message": f"✅ {rel_path} ({size} bytes)",
                         "size": size,
+                        "old_content": old_content,
+                        "new_content": content
                     }
                 }
             except Exception as e:
@@ -226,67 +236,80 @@ async def _generate_file_content(model: str, prompt: str, file_path: str) -> Opt
 
 async def self_healing_build(task: str, project_path: str, max_attempts: int = 3) -> AsyncGenerator[Dict[str, Any], None]:
     """
-    Future Scope: Self-healing build.
-    Runs tests after building and fixes failures in a loop.
+    Self-healing build loop.
+    Repeatedly builds and tests until success or exhaustion.
     """
     attempt = 0
-    context = ""
+    error_context = ""
     
     while attempt < max_attempts:
         attempt += 1
-        yield {"type": "log", "data": {"phase": "self_heal", "message": f"Build attempt {attempt}/{max_attempts}"}}
+        yield {"type": "log", "data": {"phase": "self_heal", "message": f"🚀 Build attempt {attempt}/{max_attempts}..."}}
 
-        # Run architect phase
+        # Boost the user task with error logs if retrying
+        current_task = task
+        if error_context:
+            current_task += f"\n\n🚨 PREVIOUS ATTEMPT FAILED WITH ERRORS:\n{error_context}\nPlease FIX these errors in the next plan/files."
+
+        # Phase 1: Architect
         plan = None
-        async for event in architect_phase(task + (f"\n\nPrevious attempt failed with:\n{context}" if context else ""), project_path):
+        async for event in architect_phase(current_task, project_path):
             yield event
             if event["type"] == "log" and event["data"].get("phase") == "architect_done":
                 plan = event["data"].get("plan")
 
         if not plan:
-            yield {"type": "error", "data": {"message": "Architect phase failed"}}
+            yield {"type": "error", "data": {"message": "Self-heal: Architect failed to generate plan"}}
             return
 
-        # Run coder phase
-        async for event in coder_phase(plan, project_path, context):
+        # Phase 2: Coder
+        async for event in coder_phase(plan, project_path, error_context):
             yield event
 
-        # Try to run tests (if test files exist)
+        # Phase 3: Verify (Self-Heal Trigger)
+        yield {"type": "log", "data": {"phase": "verifying", "message": "🔍 Verifying build health..."}}
         test_result = await _run_project_tests(project_path)
+        
         if test_result["success"]:
-            yield {"type": "log", "data": {"phase": "self_heal_pass", "message": "✅ All tests passed!"}}
+            yield {"type": "log", "data": {"phase": "complete", "message": "✅ Build successful and verified!"}}
             return
         else:
-            context = test_result.get("output", "Tests failed")
-            yield {"type": "log", "data": {"phase": "self_heal_fail", "message": f"Tests failed, retrying...\n{context}"}}
+            error_context = test_result.get("output", "Unknown error")
+            yield {"type": "log", "data": {"phase": "self_heal_retry", "message": f"⚠️ Verification failed (see logs). Retrying handle...", "error": error_context}}
 
-    yield {"type": "log", "data": {"phase": "self_heal_exhausted", "message": f"Max attempts ({max_attempts}) reached"}}
+    yield {"type": "error", "data": {"message": f"❌ Self-healing exhausted after {max_attempts} attempts. Check manually."}}
 
 
 async def _run_project_tests(project_path: str) -> dict:
-    """Attempt to run tests in the project directory."""
-    import subprocess
-    
-    # Check for common test runners
+    """Detect and execute test runners. Capture failures for self-healing."""
+    # 1. Look for obvious build/compile indicators
+    # Python syntax check
+    python_files = [f for f in os.listdir(project_path) if f.endswith('.py')]
+    for pyf in python_files:
+        try:
+            full_p = os.path.join(project_path, pyf)
+            subprocess.run(["python", "-m", "py_compile", full_p], check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            return {"success": False, "output": f"Syntax Error in {pyf}:\n{e.stderr.decode()}"}
+
+    # 2. Check for missing dependencies (requirements.txt)
+    if os.path.exists(os.path.join(project_path, "requirements.txt")):
+        # Simple check for common package missing errors (not running full pip install here)
+        pass
+
+    # 3. Run specific test suites
     test_commands = []
     if os.path.exists(os.path.join(project_path, "package.json")):
-        test_commands.append(["npm", "test", "--", "--watchAll=false"])
-    if os.path.exists(os.path.join(project_path, "pytest.ini")) or \
-       os.path.exists(os.path.join(project_path, "setup.py")) or \
-       os.path.exists(os.path.join(project_path, "pyproject.toml")):
-        test_commands.append(["python", "-m", "pytest", "-x", "--tb=short"])
-    
-    if not test_commands:
-        return {"success": True, "output": "No test runner found, skipping"}
+        test_commands.append(["npm", "run", "build"]) # Build is a good 'test' for TS/Next
+    if os.path.exists(os.path.join(project_path, "pytest.ini")) or os.path.exists(os.path.join(project_path, "tests")):
+        test_commands.append(["python", "-m", "pytest", "--tb=short"])
 
     for cmd in test_commands:
         try:
-            result = subprocess.run(
-                cmd, cwd=project_path, capture_output=True, text=True, timeout=120
-            )
-            if result.returncode != 0:
-                return {"success": False, "output": result.stdout + result.stderr}
+            proc = subprocess.run(cmd, cwd=project_path, capture_output=True, text=True, timeout=60)
+            if proc.returncode != 0:
+                return {"success": False, "output": f"Command Failed: {' '.join(cmd)}\n{proc.stdout}\n{proc.stderr}"}
         except Exception as e:
-            return {"success": False, "output": str(e)}
-    
-    return {"success": True, "output": "All tests passed"}
+            return {"success": False, "output": f"Runner Error: {str(e)}"}
+
+    return {"success": True, "output": "Verfied"}

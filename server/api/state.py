@@ -39,6 +39,27 @@ async def init_db():
             )
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id)")
+        
+        # Full-text search table (FTS5) for sessions
+        try:
+            await db.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS session_search USING fts5(
+                    session_id UNINDEXED,
+                    content,
+                    tokenize='porter unicode61'
+                )
+            """)
+            # FTS5 for project-wide code search (RAG)
+            await db.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS project_index USING fts5(
+                    path UNINDEXED,
+                    content,
+                    project_root UNINDEXED,
+                    tokenize='porter unicode61'
+                )
+            """)
+        except aiosqlite.Error:
+            pass
         await db.commit()
 
 async def create_session(session_type: str = "chat", title: str = "", project_path: str = "") -> dict:
@@ -78,6 +99,15 @@ async def add_event(session_id: str, event_type: str, data: dict) -> None:
                 "UPDATE sessions SET file_count = file_count + 1 WHERE id = ?",
                 (session_id,)
             )
+        
+        # Index chat messages for FTS5
+        if event_type in ["chat_response", "chat_start", "aider_output", "log"]:
+            content = data.get("content") or data.get("line") or data.get("message")
+            if content and isinstance(content, str):
+                await db.execute(
+                    "INSERT INTO session_search (session_id, content) VALUES (?, ?)",
+                    (session_id, content)
+                )
         await db.commit()
 
 async def update_token_usage(session_id: str, prompt_tokens: int, completion_tokens: int, model: str) -> None:
@@ -163,4 +193,54 @@ async def update_session_title(session_id: str, title: str) -> None:
     """Update a session's title."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE sessions SET title = ? WHERE id = ?", (title, session_id))
+        await db.commit()
+
+async def search_sessions(query: str) -> list:
+    """Search sessions using FTS5 match on content."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("""
+            SELECT DISTINCT s.* FROM sessions s
+            JOIN session_search ss ON s.id = ss.session_id
+            WHERE ss.content MATCH ?
+            ORDER BY s.updated_at DESC
+        """, (f'"{query}"*',))
+        sessions = []
+        async for row in cursor:
+            s = dict(row)
+            s["token_usage"] = json.loads(s.get("token_usage", "{}"))
+            s["metadata"] = json.loads(s.get("metadata", "{}"))
+            sessions.append(s)
+        return sessions
+
+async def index_project_file(project_root: str, file_path: str, content: str) -> None:
+    """Add or update a file in the project FTS index."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Avoid duplicate content if already indexed
+        await db.execute("DELETE FROM project_index WHERE path = ? AND project_root = ?", (file_path, project_root))
+        await db.execute(
+            "INSERT INTO project_index (path, content, project_root) VALUES (?, ?, ?)",
+            (file_path, content, project_root)
+        )
+        await db.commit()
+
+async def search_project_context(project_root: str, query: str, limit: int = 5) -> List[Dict[str, str]]:
+    """Search project index for relevant file snippets based on a query."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        # Search using BM25-like rank if possible, fallback to standard match
+        cursor = await db.execute("""
+            SELECT path, content FROM project_index 
+            WHERE project_root = ? AND content MATCH ? 
+            LIMIT ?
+        """, (project_root, f'"{query}"*', limit))
+        results = []
+        async for row in cursor:
+            results.append({"path": row[0], "content": row[1]})
+        return results
+
+async def clear_project_index(project_root: str) -> None:
+    """Clear all indexed files for a project."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM project_index WHERE project_root = ?", (project_root,))
         await db.commit()

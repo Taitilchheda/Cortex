@@ -3,8 +3,22 @@ import { useState, useEffect } from 'react';
 import { Session, AgentSettings } from '../lib/types';
 import {
   fetchRecommendations, fetchModels, fetchRouter, updateRouter,
-  fetchAgentSettings, updateAgentSettings
+  fetchAgentSettings, updateAgentSettings, configureTools
 } from '../lib/api';
+import { 
+  Activity, 
+  Lightbulb, 
+  Settings, 
+  Plug, 
+  Binary, 
+  Cpu, 
+  Database, 
+  Zap,
+  HardDrive,
+  Globe2,
+  List
+} from 'lucide-react';
+import CodeOutline from './CodeOutline';
 
 interface RightPanelProps {
   activeSession: Session | null;
@@ -14,9 +28,10 @@ interface RightPanelProps {
   totalFiles: number;
   contextTokens: number;
   contextLimit: number;
+  activeFile?: { path: string; content: string } | null;
 }
 
-type TabKey = 'context' | 'monitor' | 'advisor' | 'settings' | 'api';
+type TabKey = 'context' | 'monitor' | 'advisor' | 'settings' | 'api' | 'tools' | 'outline';
 
 const API_ENDPOINTS = [
   { method: 'GET', path: '/', desc: 'Server info + Ollama status' },
@@ -24,30 +39,14 @@ const API_ENDPOINTS = [
   { method: 'POST', path: '/agent/build', desc: 'Build pipeline (SSE stream)' },
   { method: 'POST', path: '/agent/chat', desc: 'Chat with role routing (SSE)' },
   { method: 'POST', path: '/agent/aider', desc: 'Aider refactor (SSE)' },
-  { method: 'POST', path: '/v1/chat/completions', desc: 'OpenAI-compatible endpoint' },
-  { method: 'GET', path: '/v1/models', desc: 'Model list (OpenAI format)' },
-  { method: 'POST', path: '/files/upload', desc: 'File upload (multipart)' },
-  { method: 'GET', path: '/files/tree', desc: 'File tree for project path' },
-  { method: 'GET', path: '/files/read', desc: 'Read file content' },
-  { method: 'GET', path: '/config/router', desc: 'Current model routing' },
-  { method: 'POST', path: '/config/router', desc: 'Update routing live' },
-  { method: 'POST', path: '/system/recommend', desc: 'Model recommendations' },
-  { method: 'GET', path: '/settings/agent', desc: 'Agent behaviour settings' },
-  { method: 'POST', path: '/settings/agent', desc: 'Update agent settings' },
-  { method: 'GET', path: '/notifications', desc: 'Recent notifications' },
-  { method: 'DELETE', path: '/notifications', desc: 'Clear notifications' },
-  { method: 'GET', path: '/sessions', desc: 'List sessions' },
-  { method: 'GET', path: '/sessions/{id}', desc: 'Full session with replay' },
-  { method: 'DELETE', path: '/sessions/{id}', desc: 'Delete session' },
-  { method: 'POST', path: '/sessions/{id}/pin', desc: 'Pin/unpin session' },
-  { method: 'GET', path: '/templates', desc: 'Project templates' },
-  { method: 'GET', path: '/benchmarks', desc: 'Coding benchmarks' },
+  { method: 'POST', path: '/v1/chat/completions', desc: 'OpenAI-compatible' },
+  { method: 'GET', path: '/v1/models', desc: 'Model list' },
 ];
 
 const ROLES = ['architect', 'coder', 'debug', 'quick', 'explain', 'review'];
 
 export default function RightPanel({
-  activeSession, fileCount, isRunning, doneFiles, totalFiles, contextTokens, contextLimit
+  activeSession, fileCount, isRunning, doneFiles, totalFiles, contextTokens, contextLimit, activeFile
 }: RightPanelProps) {
   const [tab, setTab] = useState<TabKey>('context');
   const [vram, setVram] = useState('12');
@@ -62,17 +61,24 @@ export default function RightPanel({
     auto_approve: 'ask', max_files: 50, max_retries: 1,
     self_heal_count: 3, review_on_build: false, test_on_build: false, context_limit: 32768,
   });
-  const [tools, setTools] = useState({
-    file_writer: true, bash: true, http_fetch: true, git: true
+  const [toolConfig, setToolConfig] = useState<Record<string, boolean>>({
+    web_search: true,
+    rag_index: false,
+    code_review: true,
+    telemetry: true,
   });
+  const [toolSaving, setToolSaving] = useState(false);
 
   useEffect(() => {
     fetchModels().then(d => setModels(d.data?.map((m: any) => m.id) || [])).catch(() => {});
     fetchRouter().then(d => setRouter(d.router || {})).catch(() => {});
     fetchAgentSettings().then(d => setSettings(d)).catch(() => {});
+    const stored = typeof window !== 'undefined' ? localStorage.getItem('cortex-tools') : null;
+    if (stored) {
+      try { setToolConfig(JSON.parse(stored)); } catch {}
+    }
   }, []);
 
-  // Auto-switch to monitor when running
   useEffect(() => {
     if (isRunning) setTab('monitor');
   }, [isRunning]);
@@ -84,12 +90,6 @@ export default function RightPanel({
       setRecommendation(r);
     } catch { /* ignore */ }
     setLoading(false);
-  };
-
-  const applyRecommendation = async () => {
-    if (!recommendation?.suggested_router) return;
-    const result = await updateRouter(recommendation.suggested_router);
-    setRouter(result.router);
   };
 
   const saveRouter = async () => {
@@ -107,338 +107,180 @@ export default function RightPanel({
   };
 
   const saveTools = async () => {
-    // Mock save, wait for v5 for full backend connection
+    setToolSaving(true);
+    await configureTools(Object.entries(toolConfig).filter(([_, enabled]) => enabled).map(([k]) => k));
+    localStorage.setItem('cortex-tools', JSON.stringify(toolConfig));
     setSaved('tools');
     setTimeout(() => setSaved(''), 2000);
+    setToolSaving(false);
   };
 
-  // Token usage
-  const tok = activeSession?.token_usage;
   const tokPercent = contextLimit > 0 ? Math.min((contextTokens / contextLimit) * 100, 100) : 0;
-  const tokColor = tokPercent < 50 ? 'green' : tokPercent < 80 ? 'amber' : 'red';
+  const tokColor = tokPercent < 50 ? 'var(--green)' : tokPercent < 80 ? 'var(--amber)' : 'var(--red)';
 
   return (
     <div className="right-panel" id="right-panel">
-      <div className="rp-tabs">
-        {(['context', 'monitor', 'advisor', 'settings', 'api'] as TabKey[]).map(t => (
-          <button key={t} className={`rp-tab ${tab === t ? 'active' : ''}`}
-            onClick={() => setTab(t)} id={`rp-tab-${t}`}>
-            {t === 'context' ? '🔍' : t === 'monitor' ? '📊' : t === 'advisor' ? '💡' : t === 'settings' ? '⚙' : '🔌'}
-          </button>
-        ))}
+      <div className="lp-tabs">
+        <button className={`lp-tab ${tab === 'context' ? 'active' : ''}`} onClick={() => setTab('context')} title="Inspector">
+          <Binary size={18} strokeWidth={tab === 'context' ? 2.5 : 2} />
+        </button>
+        <button className={`lp-tab ${tab === 'monitor' ? 'active' : ''}`} onClick={() => setTab('monitor')} title="Monitor">
+          <Activity size={18} strokeWidth={tab === 'monitor' ? 2.5 : 2} />
+        </button>
+        <button className={`lp-tab ${tab === 'advisor' ? 'active' : ''}`} onClick={() => setTab('advisor')} title="Advisor">
+          <Lightbulb size={18} strokeWidth={tab === 'advisor' ? 2.5 : 2} />
+        </button>
+        <button className={`lp-tab ${tab === 'settings' ? 'active' : ''}`} onClick={() => setTab('settings')} title="Settings">
+          <Settings size={18} strokeWidth={tab === 'settings' ? 2.5 : 2} />
+        </button>
+        <button className={`lp-tab ${tab === 'tools' ? 'active' : ''}`} onClick={() => setTab('tools')} title="AI Tools">
+          <Globe2 size={18} strokeWidth={tab === 'tools' ? 2.5 : 2} />
+        </button>
+        <button className={`lp-tab ${tab === 'api' ? 'active' : ''}`} onClick={() => setTab('api')} title="API Reference">
+          <Plug size={18} strokeWidth={tab === 'api' ? 2.5 : 2} />
+        </button>
+        <button className={`lp-tab ${tab === 'outline' ? 'active' : ''}`} onClick={() => setTab('outline')} title="Outline">
+          <List size={18} strokeWidth={tab === 'outline' ? 2.5 : 2} />
+        </button>
       </div>
 
-      <div className="rp-scroll">
-        {/* ── Context Inspector ── */}
+      <div className="lp-scrollable" style={{ padding: 16 }}>
         {tab === 'context' && (
           <>
-            <div className="card">
+            <div className="pro-card">
               <div className="card__label">Context Window</div>
               <div className="tok-gauge">
                 <div className="tok-bar">
-                  <div className={`tok-fill ${tokColor}`} style={{ width: `${tokPercent}%` }} />
+                  <div className="tok-fill" style={{ width: `${tokPercent}%`, background: tokColor }} />
                 </div>
                 <div className="tok-nums">
                   <span>{contextTokens.toLocaleString()} used</span>
-                  <span>{contextLimit.toLocaleString()} limit</span>
+                  <span>{contextLimit.toLocaleString()} total</span>
                 </div>
               </div>
             </div>
 
-            <div className="card">
-              <div className="card__label">Files Created</div>
-              <div className="card__val">{fileCount}</div>
-              <div className="card__sub">this session</div>
-            </div>
-
-            {tok && tok.total_tokens ? (
-              <>
-                <div className="card">
-                  <div className="card__label">Token Usage</div>
-                  <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-                    <div style={{ flex: 1, textAlign: 'center' }}>
-                      <div style={{ fontSize: 16, fontWeight: 800 }}>{(tok.total_prompt || 0).toLocaleString()}</div>
-                      <div style={{ fontSize: 10, color: 'var(--text-4)' }}>Prompt</div>
-                    </div>
-                    <div style={{ flex: 1, textAlign: 'center' }}>
-                      <div style={{ fontSize: 16, fontWeight: 800 }}>{(tok.total_completion || 0).toLocaleString()}</div>
-                      <div style={{ fontSize: 10, color: 'var(--text-4)' }}>Completion</div>
-                    </div>
-                    <div style={{ flex: 1, textAlign: 'center' }}>
-                      <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--cyan)' }}>{(tok.total_tokens || 0).toLocaleString()}</div>
-                      <div style={{ fontSize: 10, color: 'var(--text-4)' }}>Total</div>
-                    </div>
-                  </div>
-                </div>
-
-                {tok.by_model && Object.keys(tok.by_model).length > 0 && (
-                  <div className="card">
-                    <div className="card__label">By Model</div>
-                    {Object.entries(tok.by_model).map(([model, usage]) => (
-                      <div key={model} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}>
-                        <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>{model}</span>
-                        <span style={{ color: 'var(--text-4)' }}>{(usage.prompt + usage.completion).toLocaleString()}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="card">
-                <div className="card__label">Token Usage</div>
-                <div className="card__sub">No tokens used yet</div>
+            <div className="pro-card">
+              <div className="card__label">Session Metrics</div>
+              <div style={{ display: 'flex', gap: 12, marginTop: 4 }}>
+                 <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 20, fontWeight: 700 }}>{fileCount}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-4)', textTransform: 'uppercase' }}>Files</div>
+                 </div>
+                 <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--accent)' }}>{(activeSession?.token_usage?.total_tokens || 0).toLocaleString()}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-4)', textTransform: 'uppercase' }}>Tokens</div>
+                 </div>
               </div>
-            )}
-
-            <div className="card">
-              <div className="card__label">OpenAI Compatible</div>
-              <div className="card__mono" style={{ marginTop: 4 }}>http://localhost:8000/v1</div>
-              <div className="card__sub">API Key: local (any string)</div>
+            </div>
+            
+            <div className="pro-card">
+              <div className="card__label">Local Server</div>
+              <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-2)' }}>
+                http://localhost:8000/v1
+              </div>
             </div>
           </>
         )}
 
-        {/* ── Live Agent Monitor ── */}
         {tab === 'monitor' && (
-          <>
-            <div className="card">
-              <div className="card__label">Agent Status</div>
-              <div className="card__val" style={{ fontSize: 14, color: isRunning ? 'var(--violet)' : 'var(--green)' }}>
-                {isRunning ? '● Running' : '○ Idle'}
-              </div>
-            </div>
-
-            {isRunning && totalFiles > 0 && (
-              <div className="card">
-                <div className="card__label">File Progress</div>
-                <div className="progress-outer" style={{ height: 6 }}>
-                  <div className="progress-inner" style={{ width: `${Math.round((doneFiles / totalFiles) * 100)}%` }} />
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, fontSize: 11 }}>
-                  <span style={{ color: 'var(--green)', fontWeight: 700 }}>{doneFiles} / {totalFiles} files</span>
-                  <span style={{ color: 'var(--text-4)' }}>{Math.round((doneFiles / totalFiles) * 100)}%</span>
-                </div>
-              </div>
-            )}
-
-            <div className="card">
-              <div className="card__label">Session Type</div>
-              <div style={{ fontSize: 13, fontWeight: 700, textTransform: 'capitalize', color: 'var(--text-2)' }}>
-                {activeSession?.type || 'None'}
-              </div>
-            </div>
-          </>
+          <div className="pro-card">
+             <div className="card__label">Agent Activity</div>
+             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                <div className={`status-ring ${isRunning ? 'status-ring--ok' : ''}`} style={{ background: isRunning ? 'var(--accent)' : 'var(--text-4)' }} />
+                <span style={{ fontSize: 13, fontWeight: 600 }}>{isRunning ? 'Processing Workspace' : 'Waiting for Input'}</span>
+             </div>
+          </div>
         )}
 
-        {/* ── Advisor ── */}
         {tab === 'advisor' && (
           <>
-            <div className="card">
-              <div className="card__label">Hardware Profile</div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={{ fontSize: 10, color: 'var(--text-4)', fontWeight: 700 }}>GPU VRAM (GB)</label>
-                  <input type="number" className="lp-search" style={{ width: '100%', marginTop: 3 }}
-                    value={vram} onChange={e => setVram(e.target.value)} id="vram-input" />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label style={{ fontSize: 10, color: 'var(--text-4)', fontWeight: 700 }}>System RAM (GB)</label>
-                  <input type="number" className="lp-search" style={{ width: '100%', marginTop: 3 }}
-                    value={ram} onChange={e => setRam(e.target.value)} id="ram-input" />
-                </div>
-              </div>
-              <div style={{ marginTop: 8 }}>
-                <label style={{ fontSize: 10, color: 'var(--text-4)', fontWeight: 700 }}>Priority</label>
-                <select className="lp-search" style={{ width: '100%', marginTop: 3, cursor: 'pointer' }}
-                  value={priority} onChange={e => setPriority(e.target.value)} id="priority-select">
-                  <option value="speed">Speed</option>
-                  <option value="balanced">Balanced</option>
-                  <option value="quality">Quality</option>
-                </select>
-              </div>
-              <button className="btn btn--primary" style={{ width: '100%', justifyContent: 'center', marginTop: 10 }}
-                onClick={doRecommend} disabled={loading} id="recommend-btn">
-                {loading ? 'Analyzing...' : '🔍 Analyze Models'}
-              </button>
+            <div className="pro-card">
+               <div className="card__label">Hardware Profile</div>
+               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
+                  <div>
+                    <label style={{ fontSize: 10, color: 'var(--text-4)' }}>VRAM (GB)</label>
+                    <input type="number" className="lp-search" value={vram} onChange={e => setVram(e.target.value)} style={{ padding: 4 }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 10, color: 'var(--text-4)' }}>RAM (GB)</label>
+                    <input type="number" className="lp-search" value={ram} onChange={e => setRam(e.target.value)} style={{ padding: 4 }} />
+                  </div>
+               </div>
+               <button className="btn--primary btn--sm" style={{ width: '100%', marginTop: 12 }} onClick={doRecommend}>Run Analysis</button>
             </div>
-
             {recommendation?.models?.map((m: any, i: number) => (
-              <div className="mr-card" key={i}>
-                <div className="mr-head">
-                  <span className="mr-name">{m.model}</span>
-                  <span className={`mr-rank rank-${m.rank?.replace('+', '')}`}>{m.rank}</span>
-                </div>
-                <div className="mr-meta">
-                  <span>{m.size_gb}GB</span>
-                  <span>HumanEval: {m.humaneval}%</span>
-                  <span>{m.specialty}</span>
-                </div>
-                <div style={{ marginTop: 4 }}>
-                  {m.fits_vram
-                    ? <span style={{ fontSize: 10, color: 'var(--green)', fontWeight: 700 }}>✓ Fits VRAM</span>
-                    : m.needs_ram_offload
-                      ? <span style={{ fontSize: 10, color: 'var(--amber)', fontWeight: 700 }}>⚠ RAM Offload</span>
-                      : <span style={{ fontSize: 10, color: 'var(--red)', fontWeight: 700 }}>✕ Too Large</span>}
-                </div>
+              <div className="pro-card" key={i}>
+                 <div className="pro-head"><span className="pro-name">{m.model}</span><span className="pro-badge">{m.rank}</span></div>
+                 <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>{m.specialty}</div>
               </div>
             ))}
-
-            {recommendation && (
-              <button className="btn btn--primary" style={{ width: '100%', justifyContent: 'center', marginTop: 6 }}
-                onClick={applyRecommendation} id="apply-rec-btn">✅ Apply Recommendations</button>
-            )}
           </>
         )}
 
-        {/* ── Settings ── */}
         {tab === 'settings' && (
-          <>
-            {/* Agent behaviour */}
-            <div className="card">
-              <div className="card__label">Agent Behaviour</div>
-
-              <div className="setting-row" style={{ marginTop: 6 }}>
-                <span className="setting-label">Auto-approve writes</span>
-                <div className="setting-ctrl">
-                  <select value={settings.auto_approve} onChange={e => setSettings({ ...settings, auto_approve: e.target.value })}>
-                    <option value="ask">Always Ask</option>
-                    <option value="always_proceed">Always Proceed</option>
-                    <option value="ask_new_only">Ask for New Only</option>
-                  </select>
-                </div>
+           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div className="pro-card">
+                 <div className="card__label">Agent Parameters</div>
+                 <div className="setting-box">
+                   <div className="setting-row">
+                      <span className="setting-label">Self-Heal Loop</span>
+                      <input type="number" className="setting-input" value={settings.self_heal_count} onChange={e => setSettings({...settings, self_heal_count: parseInt(e.target.value)})} />
+                   </div>
+                 </div>
+                 <button className="btn--primary btn--sm" style={{ width: '100%', marginTop: 12 }} onClick={saveSettings}>{saved === 'settings' ? 'Saved' : 'Keep Changes'}</button>
               </div>
-
-              <div className="setting-row">
-                <span className="setting-label">Max files per build</span>
-                <div className="setting-ctrl">
-                  <input type="number" value={settings.max_files} min={5} max={100}
-                    onChange={e => setSettings({ ...settings, max_files: parseInt(e.target.value) || 50 })} />
-                </div>
+              <div className="pro-card">
+                 <div className="card__label">Routing Map</div>
+                 <div className="setting-box">
+                   {ROLES.map(role => (
+                     <div className="setting-row" key={role}>
+                        <span className="setting-label">{role}</span>
+                        <select className="setting-select" value={router[role] || ''} onChange={e => setRouter({...router, [role]: e.target.value})}>
+                          {models.map(m => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                     </div>
+                   ))}
+                 </div>
+                 <button className="btn--primary btn--sm" style={{ width: '100%', marginTop: 12 }} onClick={saveRouter}>Sync Router</button>
               </div>
+           </div>
+        )}
 
-              <div className="setting-row">
-                <span className="setting-label">Max retries per file</span>
-                <div className="setting-ctrl">
-                  <input type="number" value={settings.max_retries} min={0} max={5}
-                    onChange={e => setSettings({ ...settings, max_retries: parseInt(e.target.value) || 1 })} />
-                </div>
-              </div>
+        {tab === 'tools' && (
+          <div className="pro-card">
+            <div className="card__label">AI Tools</div>
+            {['web_search', 'rag_index', 'code_review', 'telemetry'].map(t => (
+              <label key={t} className="tool-toggle">
+                <input type="checkbox" checked={toolConfig[t]} onChange={e => setToolConfig(prev => ({ ...prev, [t]: e.target.checked }))} />
+                <div className="tool-label">{t.replace('_', ' ')}</div>
+              </label>
+            ))}
+            <button className="btn--primary" onClick={saveTools} disabled={toolSaving}>{toolSaving ? 'Saving…' : 'Apply Tools'}</button>
+          </div>
+        )}
 
-              <div className="setting-row">
-                <span className="setting-label">Self-heal loop count</span>
-                <div className="setting-ctrl">
-                  <input type="number" value={settings.self_heal_count} min={0} max={5}
-                    onChange={e => setSettings({ ...settings, self_heal_count: parseInt(e.target.value) || 3 })} />
-                </div>
-              </div>
-
-              <div className="setting-row">
-                <span className="setting-label">Context window limit</span>
-                <div className="setting-ctrl">
-                  <select value={settings.context_limit}
-                    onChange={e => setSettings({ ...settings, context_limit: parseInt(e.target.value) })}>
-                    <option value={4096}>4K</option>
-                    <option value={8192}>8K</option>
-                    <option value={16384}>16K</option>
-                    <option value={32768}>32K</option>
-                    <option value={131072}>128K</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="setting-row">
-                <span className="setting-label">Review on build</span>
-                <div className="setting-ctrl">
-                  <input type="checkbox" checked={settings.review_on_build}
-                    onChange={e => setSettings({ ...settings, review_on_build: e.target.checked })} />
-                </div>
-              </div>
-
-              <div className="setting-row">
-                <span className="setting-label">Test on build</span>
-                <div className="setting-ctrl">
-                  <input type="checkbox" checked={settings.test_on_build}
-                    onChange={e => setSettings({ ...settings, test_on_build: e.target.checked })} />
-                </div>
-              </div>
-
-              <button className="btn btn--primary btn--sm" style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}
-                onClick={saveSettings}>{saved === 'settings' ? '✅ Saved!' : '💾 Save Settings'}</button>
-            </div>
-
-            {/* Model Routing */}
-            <div className="card">
-              <div className="card__label">Model Routing</div>
-              {ROLES.map(role => (
-                <div className="setting-row" key={role} style={{ marginTop: role === ROLES[0] ? 6 : 0 }}>
-                  <span className="setting-label">{role}</span>
-                  <div className="setting-ctrl">
-                    <select value={router[role] || ''} onChange={e => setRouter({ ...router, [role]: e.target.value })}
-                      id={`router-${role}`}>
-                      {models.map(m => <option key={m} value={m}>{m}</option>)}
-                    </select>
-                  </div>
+        {tab === 'api' && (
+           <div className="lp-scrollable">
+              {API_ENDPOINTS.map((ep, i) => (
+                <div key={i} className="api-row" style={{ padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <span style={{ fontSize: 9, fontWeight: 900, background: 'var(--bg-hover)', padding: '2px 4px', borderRadius: 2 }}>{ep.method}</span>
+                      <code style={{ fontSize: 11, color: 'var(--text-1)' }}>{ep.path}</code>
+                   </div>
+                   <div style={{ fontSize: 11, color: 'var(--text-4)', marginTop: 4 }}>{ep.desc}</div>
                 </div>
               ))}
-              <button className="btn btn--primary btn--sm" style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}
-                onClick={saveRouter} id="save-router-btn">{saved === 'router' ? '✅ Saved!' : '💾 Save Router'}</button>
-            </div>
-
-            {/* Configured Tools */}
-            <div className="card">
-              <div className="card__label">Tool Access</div>
-              
-              <div className="setting-row" style={{ marginTop: 6 }}>
-                <span className="setting-label">File Writer</span>
-                <div className="setting-ctrl">
-                  <input type="checkbox" checked={tools.file_writer}
-                    onChange={e => setTools({ ...tools, file_writer: e.target.checked })} />
-                </div>
-              </div>
-              <div className="setting-row">
-                <span className="setting-label">Terminal/Bash</span>
-                <div className="setting-ctrl">
-                  <input type="checkbox" checked={tools.bash}
-                    onChange={e => setTools({ ...tools, bash: e.target.checked })} />
-                </div>
-              </div>
-              <div className="setting-row">
-                <span className="setting-label">HTTP Fetch</span>
-                <div className="setting-ctrl">
-                  <input type="checkbox" checked={tools.http_fetch}
-                    onChange={e => setTools({ ...tools, http_fetch: e.target.checked })} />
-                </div>
-              </div>
-              <div className="setting-row">
-                <span className="setting-label">Git Commands</span>
-                <div className="setting-ctrl">
-                  <input type="checkbox" checked={tools.git}
-                    onChange={e => setTools({ ...tools, git: e.target.checked })} />
-                </div>
-              </div>
-
-              <button className="btn btn--primary btn--sm" style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}
-                onClick={saveTools}>{saved === 'tools' ? '✅ Saved!' : '🔧 Configure Tools'}</button>
-            </div>
-          </>
+           </div>
         )}
 
-        {/* ── API Docs ── */}
-        {tab === 'api' && (
-          <>
-            <div style={{ marginBottom: 10, fontSize: 11, color: 'var(--text-3)' }}>
-              All endpoints on <code className="inline-code">localhost:8000</code>
-            </div>
-            {API_ENDPOINTS.map((ep, i) => (
-              <div key={i} className="api-row">
-                <div>
-                  <span className={`api-method api-${ep.method}`}>{ep.method}</span>
-                  <span className="api-path">{ep.path}</span>
-                </div>
-                <div className="api-desc">{ep.desc}</div>
-              </div>
-            ))}
-          </>
+        {tab === 'outline' && (
+          <div className="lp-scrollable">
+            <CodeOutline 
+               code={activeFile?.content || ''} 
+               language={activeFile?.path?.split('.').pop() || 'plaintext'} 
+            />
+          </div>
         )}
       </div>
     </div>

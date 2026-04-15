@@ -10,15 +10,17 @@ import glob
 import pathlib
 import base64
 import mimetypes
+import asyncio
 from contextlib import asynccontextmanager
-from typing import Optional
-from fastapi import FastAPI, UploadFile, File, Request, HTTPException
+from typing import Optional, List, Dict, Any
+from fastapi import FastAPI, UploadFile, File, Request, HTTPException, BackgroundTasks, WebSocket, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from api.state import (
     init_db, create_session, get_session, list_sessions, 
-    delete_session, clear_all_sessions, add_event, update_session_title
+    delete_session, clear_all_sessions, add_event, update_session_title, search_sessions,
+    index_project_file, search_project_context, clear_project_index
 )
 from config.models import (
     MODEL_ROUTER, get_model_for_role, update_router, 
@@ -101,6 +103,17 @@ class FeedbackRequest(BaseModel):
 
 class ToolConfigRequest(BaseModel):
     tools: list
+
+class IndexRequest(BaseModel):
+    project_path: str
+
+class ProjectSearchRequest(BaseModel):
+    project_path: str
+    query: str
+    limit: int = 5
+
+class ConfigToolsRequest(BaseModel):
+    tools: List[Dict[str, Any]] = Field(..., description="List of tool configurations")
 
 # ─── In-Memory Stores ────────────────────────────────────────────
 _agent_settings = {
@@ -335,18 +348,75 @@ async def set_router(req: RouterUpdateRequest):
 
 # ─── Session Endpoints ───────────────────────────────────────────
 @app.get("/sessions")
-async def get_sessions():
-    """List all sessions (no history payload)."""
-    sessions = await list_sessions()
-    return {"sessions": sessions}
+async def list_sess():
+    """List all sessions by recency (updated_at)."""
+    return {"sessions": await list_sessions()}
 
 @app.get("/sessions/pinned")
 async def get_pinned():
     """Get list of pinned session IDs."""
     return {"pinned": list(_pinned_sessions)}
 
+@app.post("/project/index")
+async def project_index_endpoint(req: IndexRequest, background_tasks: BackgroundTasks):
+    """Recursively index a project directory for RAG."""
+    if not os.path.exists(req.project_path):
+        raise HTTPException(status_code=404, detail="Project path not found")
+    
+    background_tasks.add_task(reindex_project_task, req.project_path)
+    return {"status": "indexing_started", "path": req.project_path}
+
+@app.post("/project/search")
+async def project_search_endpoint(req: ProjectSearchRequest):
+    """Search the project index for code snippets."""
+    results = await search_project_context(req.project_path, req.query, req.limit)
+    return {"results": results}
+
+@app.post("/configure/tools")
+async def configure_tools_endpoint(req: ConfigToolsRequest):
+    """Persistent tool configuration for the agent."""
+    # Future Scope: Store in DB. For now, just a stub.
+    return {"status": "configured", "tools": req.tools}
+
+async def reindex_project_task(project_path: str):
+    """Background task to walk and index a project."""
+    await clear_project_index(project_path)
+    ignore_dirs = {'.git', 'node_modules', '__pycache__', 'dist', 'build', '.next'}
+    ignore_exts = {'.exe', '.dll', '.so', '.png', '.jpg', '.jpeg', '.gif', '.zip', '.pdf', '.docx'}
+    
+    file_count = 0
+    for root, dirs, files in os.walk(project_path):
+        dirs[:] = [d for d in dirs if d not in ignore_dirs]
+        for name in files:
+            ext = os.path.splitext(name)[1].lower()
+            if ext in ignore_exts:
+                continue
+            
+            full_path = os.path.join(root, name)
+            try:
+                # Limit file size for indexing (e.g., 500KB)
+                if os.path.getsize(full_path) > 500 * 1024:
+                    continue
+                
+                with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                    await index_project_file(project_path, full_path, content)
+                    file_count += 1
+            except Exception:
+                continue
+    
+    # Optional: push a socket notification or log event when done
+    print(f"Index complete: {file_count} files for {project_path}")
+
+@app.get("/sessions/search")
+async def sess_search(q: str):
+    """Search sessions by full-text search on content."""
+    if not q:
+        return {"sessions": []}
+    return {"sessions": await search_sessions(q)}
+
 @app.get("/sessions/{session_id}")
-async def get_session_detail(session_id: str):
+async def get_sess(session_id: str):
     """Full session including complete event history for replay."""
     session = await get_session(session_id)
     if not session:

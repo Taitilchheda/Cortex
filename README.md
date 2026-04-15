@@ -109,8 +109,10 @@ Run both servers simultaneously:
 ```bash
 ./START.bat
 ```
-- **Frontend**: [http://localhost:3000](http://localhost:3000)
+- **Frontend**: [http://localhost:3001](http://localhost:3001)
 - **Backend API**: [http://localhost:8000](http://localhost:8000)
+
+For detailed Windows startup and troubleshooting, see [docs/HOW_TO_RUN.md](./docs/HOW_TO_RUN.md).
 
 ---
 
@@ -134,15 +136,15 @@ Cortex/
 
 ---
 
-## 🗺️ Roadmap (v5.0)
+## 🗺️ Roadmap (v5.1 Pro)
 
-We are currently transitioning from v4 to **Cortex v5.0**. Upcoming features include:
-- [ ] **🧠 RAG Context Engine**: Local vector search for your entire codebase (ChromaDB).
-- [ ] **📟 Integrated Terminal**: xterm.js terminal embedded in the dashboard.
-- [ ] **📝 Monaco Code Editor**: Full VS Code-style editor in the file preview panel.
-- [ ] **🔀 Git Integration**: Commit, branch, and diff management directly from the UI.
-- [ ] **🧪 Test Runner**: Automated unit test execution and AI-assisted fixing.
-- [ ] **🧩 Plugin System**: Extend the agent's capabilities with custom Python hooks.
+Cortex is evolving into a high-fidelity coding workstation. See the full [ROADMAP.md](./ROADMAP.md) for its strategic future.
+- [x] **📝 Monaco Code Editor**: Full VS Code-style editor integrated.
+- [x] **🔍 Deep Search**: Indexed message history via SQLite FTS5.
+- [x] **🧭 Breadcrumbs**: Context-aware project traversal navigation.
+- [ ] **🧠 RAG Context Engine**: Local vector search for your entire codebase.
+- [ ] **💻 Integrated Terminal**: xterm.js terminal integration for builds.
+- [ ] **🔀 Git Visualizer**: Visual branch/commit management in the UI.
 
 ---
 

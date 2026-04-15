@@ -2,6 +2,25 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { AgentMode, ChatRole, FileAttachment } from '../lib/types';
 import { uploadFile } from '../lib/api';
+import { truncate } from '../lib/utils';
+import { 
+  Send, 
+  Mic, 
+  Paperclip, 
+  MessageSquare, 
+  Zap, 
+  Hammer, 
+  Settings, 
+  Brain, 
+  Code2, 
+  Bug, 
+  Sparkles, 
+  Search, 
+  StopCircle,
+  X,
+  FileText,
+  Image as ImageIcon
+} from 'lucide-react';
 
 interface CommandBarProps {
   onSend: (text: string, mode: AgentMode, role: ChatRole, projectPath: string, attachments: FileAttachment[], selfHeal: boolean) => void;
@@ -12,39 +31,26 @@ interface CommandBarProps {
   defaultMode?: AgentMode;
 }
 
-const MODES: { key: AgentMode; icon: string; label: string; desc: string }[] = [
-  { key: 'chat', icon: '💬', label: 'Chat', desc: 'Conversational AI' },
-  { key: 'build', icon: '⚡', label: 'Build', desc: 'Generate projects' },
-  { key: 'refactor', icon: '🔧', label: 'Refactor', desc: 'Bulk edits' },
+const MODES: { key: AgentMode; icon: any; label: string; desc: string; color: string }[] = [
+  { key: 'chat', icon: MessageSquare, label: 'Chat', desc: 'Conversational agent', color: '#8b5cf6' },
+  { key: 'build', icon: Zap, label: 'Build', desc: 'Generate a project', color: '#3b82f6' },
+  { key: 'refactor', icon: Hammer, label: 'Refactor', desc: 'Bulk modify code', color: '#f59e0b' },
 ];
 
-const ROLES: { key: ChatRole; label: string; desc: string }[] = [
-  { key: 'coder', label: 'Coder', desc: 'Write production code' },
-  { key: 'architect', label: 'Architect', desc: 'Design systems' },
-  { key: 'debug', label: 'Debug', desc: 'Find & fix bugs' },
-  { key: 'quick', label: 'Quick', desc: 'Fast answers' },
-  { key: 'explain', label: 'Explain', desc: 'Explain code' },
-  { key: 'review', label: 'Review', desc: 'Code review' },
+const ROLES: { key: ChatRole; label: string; desc: string; icon: any; color: string }[] = [
+  { key: 'coder', label: 'Coder', desc: 'Writes production code', icon: Code2, color: '#3b82f6' },
+  { key: 'debug', label: 'Debugger', desc: 'Finds and fixes bugs', icon: Bug, color: '#ef4444' },
+  { key: 'architect', label: 'Architect', desc: 'System design expert', icon: Brain, color: '#8b5cf6' },
+  { key: 'quick', label: 'Quick', desc: 'Fast answers', icon: Sparkles, color: '#10b981' },
+  { key: 'review', label: 'Reviewer', desc: 'Audit code quality', icon: Search, color: '#64748b' },
 ];
 
-const SLASH_COMMANDS = [
-  { cmd: '/build', mode: 'build' as AgentMode, desc: 'Full architect→coder pipeline', icon: '⚡' },
-  { cmd: '/refactor', mode: 'refactor' as AgentMode, desc: 'Aider-powered bulk edit', icon: '🔧' },
-  { cmd: '/review', mode: 'chat' as AgentMode, role: 'review' as ChatRole, desc: 'Code review agent', icon: '🔍' },
-  { cmd: '/explain', mode: 'chat' as AgentMode, role: 'explain' as ChatRole, desc: 'Explain code or concept', icon: '📖' },
-  { cmd: '/debug', mode: 'chat' as AgentMode, role: 'debug' as ChatRole, desc: 'Debug with reasoning', icon: '🐛' },
-  { cmd: '/test', mode: 'chat' as AgentMode, role: 'coder' as ChatRole, desc: 'Generate and run tests', icon: '🧪' },
-];
-
-const PROMPT_SUGGESTIONS = [
-  { text: 'Create a REST API with authentication', mode: 'build' as AgentMode },
-  { text: 'Explain how this code works', mode: 'chat' as AgentMode },
-  { text: 'Review this code for security issues', mode: 'chat' as AgentMode },
-  { text: 'Create a React component for', mode: 'build' as AgentMode },
-  { text: 'Write unit tests for', mode: 'chat' as AgentMode },
-  { text: 'Debug this error:', mode: 'chat' as AgentMode },
-  { text: 'Build a portfolio website with HTML, CSS, JS', mode: 'build' as AgentMode },
-  { text: 'Create a Python CLI tool that', mode: 'build' as AgentMode },
+const TEMPLATES = [
+  { label: 'Bug Hunt', desc: 'Diagnose + steps to fix', prompt: 'Investigate the reported issue, list likely root causes, and propose a minimal fix with file/line references.', role: 'debug' as ChatRole },
+  { label: 'Refactor Plan', desc: 'Safe restructuring checklist', prompt: 'Propose a refactor plan for this codebase. List risks, impacted modules, and stepwise commits.', role: 'architect' as ChatRole },
+  { label: 'Add Tests', desc: 'Edge cases + fixtures', prompt: 'Add automated tests covering edge cases, failure paths, and performance-critical code. Provide file names and snippets.', role: 'coder' as ChatRole },
+  { label: 'Docstring Pass', desc: 'Improve clarity', prompt: 'Improve documentation/comments for the touched functions. Keep edits minimal and precise.', role: 'review' as ChatRole },
+  { label: 'Ship Checklist', desc: 'Pre-release QA', prompt: 'Produce a release checklist: tests to run, manual verification steps, and rollback plan.', role: 'review' as ChatRole },
 ];
 
 export default function CommandBar({ onSend, onStop, isStreaming, contextTokens, contextLimit, defaultMode }: CommandBarProps) {
@@ -54,72 +60,21 @@ export default function CommandBar({ onSend, onStop, isStreaming, contextTokens,
   const [projectPath, setProjectPath] = useState('');
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const [selfHeal, setSelfHeal] = useState(false);
-  const [showSlash, setShowSlash] = useState(false);
-  const [showSuggestions, setShowSuggestions] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const textRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const startListening = () => {
-    // @ts-ignore
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      alert("Speech recognition is not supported in this browser.");
-      return;
-    }
-    const recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = true;
-
-    recognition.onstart = () => setIsListening(true);
-    recognition.onresult = (event: any) => {
-      let finalTranscript = '';
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
-        if (event.results[i].isFinal) finalTranscript += event.results[i][0].transcript;
-      }
-      if (finalTranscript) {
-        setText(prev => prev + (prev.endsWith(' ') || !prev ? '' : ' ') + finalTranscript);
-        adjustHeight();
-      }
-    };
-    recognition.onerror = () => setIsListening(false);
-    recognition.onend = () => setIsListening(false);
-    recognition.start();
-  };
-
-  // Sync mode from parent
   useEffect(() => {
     if (defaultMode) setMode(defaultMode);
   }, [defaultMode]);
 
-  // Slash command detection
-  useEffect(() => {
-    setShowSlash(text.startsWith('/') && text.length < 12 && text.length > 0);
-    setShowSuggestions(false);
-  }, [text]);
-
   const handleSend = useCallback(() => {
     let finalText = text.trim();
     if (!finalText || isStreaming) return;
-
-    let finalMode = mode;
-    let finalRole = role;
-
-    // Process slash commands
-    for (const sc of SLASH_COMMANDS) {
-      if (finalText.startsWith(sc.cmd + ' ') || finalText === sc.cmd) {
-        finalMode = sc.mode;
-        if (sc.role) finalRole = sc.role;
-        finalText = finalText.slice(sc.cmd.length).trim() || finalText;
-        break;
-      }
-    }
-
-    onSend(finalText, finalMode, finalRole, projectPath, attachments, selfHeal);
+    onSend(finalText, mode, role, projectPath, attachments, selfHeal);
     setText('');
     setAttachments([]);
-    setShowSlash(false);
-    setShowSuggestions(false);
+    if (textRef.current) textRef.current.style.height = 'auto';
   }, [text, mode, role, projectPath, attachments, selfHeal, isStreaming, onSend]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -147,212 +102,149 @@ export default function CommandBar({ onSend, onStop, isStreaming, contextTokens,
     const el = textRef.current;
     if (el) {
       el.style.height = 'auto';
-      el.style.height = Math.min(el.scrollHeight, 140) + 'px';
+      el.style.height = Math.min(el.scrollHeight, 180) + 'px';
     }
   };
 
-  // Paste images from clipboard
-  const handlePaste = async (e: React.ClipboardEvent) => {
-    const items = e.clipboardData.items;
-    for (const item of Array.from(items)) {
-      if (item.type.startsWith('image/')) {
-        e.preventDefault();
-        const blob = item.getAsFile();
-        if (blob) {
-          try {
-            const result = await uploadFile(blob);
-            setAttachments(prev => [...prev, result]);
-          } catch { /* ignore */ }
-        }
-      }
-    }
+  const startListening = () => {
+    // @ts-ignore
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+    const recognition = new SpeechRecognition();
+    recognition.onstart = () => setIsListening(true);
+    recognition.onresult = (event: any) => {
+      const transcript = event.results[event.results.length - 1][0].transcript;
+      setText(prev => prev + transcript);
+      adjustHeight();
+    };
+    recognition.onend = () => setIsListening(false);
+    recognition.start();
   };
 
-  // Context gauge
   const gaugePercent = contextLimit > 0 ? Math.min((contextTokens / contextLimit) * 100, 100) : 0;
-  const gaugeColor = gaugePercent < 50 ? 'green' : gaugePercent < 80 ? 'amber' : 'red';
-
-  // Filtered slash commands
-  const filteredSlash = showSlash
-    ? SLASH_COMMANDS.filter(sc => sc.cmd.startsWith(text.trim().split(' ')[0]))
-    : [];
-
-  // Prompt suggestions when input is focused and empty
-  const suggestions = showSuggestions && !text
-    ? PROMPT_SUGGESTIONS.filter(s => s.mode === mode || mode === 'chat').slice(0, 4)
-    : [];
+  const gaugeColor = gaugePercent < 50 ? 'var(--green)' : gaugePercent < 80 ? 'var(--amber)' : 'var(--red)';
 
   return (
-    <div className="command-bar" id="command-bar">
-      {/* Mode & Role row */}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
-        <div className="cmd-modes">
+    <div className="input-bar-v2" id="command-bar">
+      {/* Settings bar */}
+      <div className="input-v2-options">
+        <div className="v2-modes">
           {MODES.map(m => (
-            <button key={m.key}
-              className={`cmd-mode ${mode === m.key ? 'active' : ''}`}
-              onClick={() => setMode(m.key)}
-              title={m.desc}
-              id={`mode-${m.key}`}
-            >
-              {m.icon} {m.label}
+            <button key={m.key} className={`v2-mode ${mode === m.key ? 'active' : ''}`} onClick={() => setMode(m.key)}>
+               <m.icon size={12} strokeWidth={mode === m.key ? 3 : 2} style={{ color: mode === m.key ? m.color : 'inherit' }} />
+               <span>{m.label}</span>
             </button>
           ))}
         </div>
-
+        
+        <div className="v2-divider" />
+        
         {mode === 'chat' && (
-          <div className="cmd-roles">
-            {ROLES.map(r => (
-              <button key={r.key}
-                className={`cmd-role ${role === r.key ? 'active' : ''}`}
-                onClick={() => setRole(r.key)}
-                title={r.desc}
-                id={`role-${r.key}`}
-              >
-                {r.label}
-              </button>
-            ))}
+          <div className="v2-roles">
+             {ROLES.map(r => (
+                <button key={r.key} className={`v2-role ${role === r.key ? 'active' : ''}`} onClick={() => setRole(r.key)}>
+                   <r.icon size={12} strokeWidth={role === r.key ? 3 : 2} style={{ color: role === r.key ? r.color : 'inherit' }} />
+                   <span>{r.label}</span>
+                </button>
+             ))}
           </div>
         )}
+        
+        {(mode === 'build' || mode === 'refactor') && (
+           <div className="v2-path-box">
+              <input 
+                placeholder="Target project path..." 
+                value={projectPath} 
+                onChange={e => setProjectPath(e.target.value)}
+              />
+              <label className="v2-selfheal">
+                <input type="checkbox" checked={selfHeal} onChange={e => setSelfHeal(e.target.checked)} />
+                <span>Self-heal</span>
+              </label>
+           </div>
+        )}
+
+        <div style={{ flex: 1 }} />
+        
+        <div className="v2-gauge">
+          <div className="v2-gauge-bar">
+             <div className="v2-gauge-fill" style={{ width: `${gaugePercent}%`, background: gaugeColor }} />
+          </div>
+          <span style={{ color: gaugeColor }}>{contextTokens.toLocaleString()} tokens</span>
+        </div>
       </div>
 
-      {/* Project path (build/refactor) */}
-      {(mode === 'build' || mode === 'refactor') && (
-        <div className="cmd-path">
-          <input
-            placeholder="Project path (e.g., C:\my-project)"
-            value={projectPath}
-            onChange={e => setProjectPath(e.target.value)}
-            id="project-path"
-            aria-label="Project path"
-          />
-          {mode === 'build' && (
-            <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-              <input type="checkbox" checked={selfHeal} onChange={e => setSelfHeal(e.target.checked)} style={{ accentColor: 'var(--violet)' }} />
-              <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Self-heal</span>
-            </label>
-          )}
-        </div>
-      )}
-
-      {/* Attachments */}
-      {attachments.length > 0 && (
-        <div className="cmd-atts">
-          {attachments.map((att, i) => (
-            <span key={i} className="cmd-att">
-              {att.is_image ? '🖼' : '📄'} {att.name}
-              <button className="cmd-att-rm" onClick={() => removeAtt(i)} aria-label={`Remove ${att.name}`}>✕</button>
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* Slash command autocomplete */}
-      {filteredSlash.length > 0 && (
-        <div style={{
-          padding: 4, background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-          borderRadius: 'var(--radius)', marginBottom: 6,
-        }}>
-          {filteredSlash.map(sc => (
-            <div key={sc.cmd} style={{
-              padding: '6px 10px', borderRadius: 5, cursor: 'pointer',
-              fontSize: 12, display: 'flex', gap: 8, alignItems: 'center',
-              transition: 'background 0.15s',
-            }}
-            onClick={() => { setText(sc.cmd + ' '); setShowSlash(false); textRef.current?.focus(); }}
-            onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
-            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-              <span>{sc.icon}</span>
-              <code style={{ fontFamily: 'var(--font-mono)', color: 'var(--violet)', fontWeight: 700 }}>{sc.cmd}</code>
-              <span style={{ color: 'var(--text-4)', flex: 1 }}>{sc.desc}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Prompt suggestions */}
-      {suggestions.length > 0 && (
-        <div style={{
-          padding: 4, background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-          borderRadius: 'var(--radius)', marginBottom: 6,
-        }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-4)', padding: '4px 8px', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-            Suggestions
-          </div>
-          {suggestions.map((s, i) => (
-            <div key={i} style={{
-              padding: '5px 10px', borderRadius: 5, cursor: 'pointer',
-              fontSize: 12, color: 'var(--text-2)', transition: 'background 0.15s',
-            }}
-            onClick={() => { setText(s.text); setShowSuggestions(false); textRef.current?.focus(); }}
-            onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
-            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-              {s.text}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Main input */}
-      <div className="cmd-input-wrap">
+      <div className="input-v2-main">
         <textarea
           ref={textRef}
-          className="cmd-textarea"
+          className="v2-textarea"
           placeholder={
-            mode === 'build' ? 'Describe the project to build... (try /build)' :
-            mode === 'refactor' ? 'Describe the refactoring... (try /refactor)' :
-            'Ask anything, or type / for commands...'
+            mode === 'build' ? 'I want to build a...' :
+            mode === 'refactor' ? 'What should we refactor?' :
+            'Message Cortex...'
           }
           value={text}
           onChange={e => { setText(e.target.value); adjustHeight(); }}
           onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          onFocus={() => { if (!text) setShowSuggestions(true); }}
-          onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
           rows={1}
           id="main-input"
-          aria-label="Message input"
         />
-        <div className="cmd-actions">
-          {isStreaming ? (
-            <button className="cmd-send cmd-send-stop" onClick={onStop} style={{ background: 'var(--red-dim)', color: 'var(--red)', borderColor: 'var(--red)' }}>
-              ⏹ Stop
-            </button>
-          ) : (
-            <>
-              <button className="cmd-icon-btn" onClick={startListening} title="Voice input" aria-label="Microphone">
-                {isListening ? <span style={{ color: 'var(--red)', animation: 'pulse 1.5s infinite' }}>🎙</span> : '🎙'}
-              </button>
-              <button className="cmd-icon-btn" onClick={() => fileRef.current?.click()} title="Attach file (images, code, PDFs)" id="attach-btn" aria-label="Attach file">
-                📎
-              </button>
-              <input ref={fileRef} type="file" multiple style={{ display: 'none' }} onChange={handleFile} accept="*/*" />
-              <button
-                className="cmd-send"
-                onClick={handleSend}
-                disabled={!text.trim() || isStreaming}
-                id="send-btn"
-                aria-label="Send message"
-              >
-                ▶ Send
-              </button>
-            </>
-          )}
+
+        <div className="v2-actions">
+           {isStreaming ? (
+             <button className="v2-stop-btn" onClick={onStop} title="Stop generation">
+               <StopCircle size={18} />
+             </button>
+           ) : (
+             <>
+               <button className="v2-icon-btn" onClick={startListening} title="Voice" style={{ color: isListening ? 'var(--red)' : '' }}>
+                 <Mic size={16} />
+               </button>
+               <button className="v2-icon-btn" onClick={() => fileRef.current?.click()} title="Attach">
+                 <Paperclip size={16} />
+               </button>
+               <input ref={fileRef} type="file" multiple style={{ display: 'none' }} onChange={handleFile} />
+               
+               <button 
+                 className="v2-send-btn" 
+                 onClick={handleSend}
+                 disabled={!text.trim() || isStreaming}
+               >
+                 <Send size={14} fill="currentColor" />
+               </button>
+             </>
+           )}
         </div>
       </div>
 
-      {/* Context & Keyboard hints */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 5 }}>
-        <div style={{ fontSize: 10, color: 'var(--text-4)', display: 'flex', gap: 10 }}>
-          <span>Enter to send · Shift+Enter for newline</span>
-          <span>/ for commands</span>
+      {/* Attachments UI */}
+      {attachments.length > 0 && (
+        <div className="v2-attachments">
+          {attachments.map((att, i) => (
+            <div key={i} className="v2-att">
+              {att.is_image ? <ImageIcon size={12} /> : <FileText size={12} />}
+              <span className="v2-att-name">{truncate(att.name, 12)}</span>
+              <button className="v2-att-del" onClick={() => removeAtt(i)}><X size={10} /></button>
+            </div>
+          ))}
         </div>
-        <div className="cmd-context-gauge" style={{ marginTop: 0 }}>
-          <span>Context:</span>
-          <div className="gauge-bar" style={{ width: 80 }}>
-            <div className={`gauge-fill ${gaugeColor}`} style={{ width: `${gaugePercent}%` }} />
-          </div>
-          <span>{contextTokens.toLocaleString()} / {contextLimit.toLocaleString()}</span>
-        </div>
+      )}
+
+      <div className="template-row">
+        {TEMPLATES.map(t => (
+          <button
+            key={t.label}
+            className="template-chip"
+            onClick={() => {
+              setMode('chat');
+              setRole(t.role);
+              setText(t.prompt);
+              setTimeout(() => adjustHeight(), 10);
+            }}
+          >
+            <span className="t-label">{t.label}</span>
+          </button>
+        ))}
       </div>
     </div>
   );
