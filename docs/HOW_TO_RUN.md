@@ -2,6 +2,8 @@
 
 This guide covers first-time setup, daily startup, and troubleshooting across all supported desktop platforms.
 
+If you are new to Cortex, start with [USER_GUIDE.md](USER_GUIDE.md) first, then return here for platform-specific details.
+
 ## 1) Runtime Architecture
 
 ```mermaid

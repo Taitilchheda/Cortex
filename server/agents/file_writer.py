@@ -9,6 +9,7 @@ Key decision: non-streaming per-file to eliminate empty-file bugs from partial w
 import re
 import os
 import json
+import ast
 import httpx
 import asyncio
 import subprocess
@@ -58,6 +59,185 @@ def extract_code_content(raw: str, file_path: str) -> str:
 
     # Priority 3: raw fallback
     return raw.strip()
+
+
+def _balanced_json_candidates(text: str) -> list[str]:
+    """Extract likely top-level JSON object candidates by balanced brace scanning."""
+    candidates: list[str] = []
+    if not text:
+        return candidates
+
+    in_string = False
+    escape = False
+    quote = '"'
+    depth = 0
+    start_idx = -1
+
+    for i, ch in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == quote:
+                in_string = False
+            continue
+
+        if ch in {'"', "'"}:
+            in_string = True
+            quote = ch
+            continue
+
+        if ch == '{':
+            if depth == 0:
+                start_idx = i
+            depth += 1
+        elif ch == '}':
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start_idx >= 0:
+                    candidates.append(text[start_idx:i + 1])
+                    start_idx = -1
+
+    return candidates
+
+
+def _cleanup_jsonish(text: str) -> str:
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return cleaned
+
+    cleaned = cleaned.replace("\u201c", '"').replace("\u201d", '"')
+    cleaned = cleaned.replace("\u2018", "'").replace("\u2019", "'")
+    cleaned = re.sub(r"^\s*json\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"^\s*```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```\s*$", "", cleaned)
+    cleaned = re.sub(r"/\*.*?\*/", "", cleaned, flags=re.DOTALL)
+    cleaned = re.sub(r"(?m)^\s*//.*$", "", cleaned)
+    cleaned = re.sub(r"(?m)^\s*#.*$", "", cleaned)
+    cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
+    return cleaned.strip()
+
+
+def _extract_plan_candidates(raw_text: str) -> list[str]:
+    candidates: list[str] = []
+    text = str(raw_text or "").strip()
+    if not text:
+        return candidates
+
+    for match in re.finditer(r"```json\s*\n(.*?)```", text, re.DOTALL | re.IGNORECASE):
+        candidates.append(match.group(1).strip())
+
+    for match in re.finditer(r"```\s*\n(.*?)```", text, re.DOTALL):
+        block = match.group(1).strip()
+        if block and block not in candidates:
+            candidates.append(block)
+
+    for block in _balanced_json_candidates(text):
+        if block and block not in candidates:
+            candidates.append(block)
+
+    if text not in candidates:
+        candidates.append(text)
+    return candidates
+
+
+def _normalize_architect_plan(obj: Any) -> Optional[Dict[str, Any]]:
+    if isinstance(obj, dict) and isinstance(obj.get("plan"), dict):
+        obj = obj.get("plan")
+    if not isinstance(obj, dict):
+        return None
+
+    files = obj.get("files")
+    if not isinstance(files, list):
+        return None
+
+    normalized_files = []
+    for row in files:
+        if not isinstance(row, dict):
+            continue
+        path = str(row.get("path") or "").strip()
+        if not path:
+            continue
+        normalized_files.append(
+            {
+                "path": path,
+                "purpose": str(row.get("purpose") or row.get("description") or "").strip(),
+                "priority": int(row.get("priority", 99)) if str(row.get("priority", "")).strip() else 99,
+                "dependencies": row.get("dependencies") if isinstance(row.get("dependencies"), list) else [],
+            }
+        )
+
+    if not normalized_files:
+        return None
+
+    return {
+        "project_name": str(obj.get("project_name") or "Generated Project").strip() or "Generated Project",
+        "description": str(obj.get("description") or "").strip(),
+        "tech_stack": obj.get("tech_stack") if isinstance(obj.get("tech_stack"), list) else [],
+        "dependencies": obj.get("dependencies") if isinstance(obj.get("dependencies"), dict) else {},
+        "files": sorted(normalized_files, key=lambda x: int(x.get("priority", 99))),
+    }
+
+
+def parse_architect_plan(raw_text: str) -> Optional[Dict[str, Any]]:
+    candidates = _extract_plan_candidates(raw_text)
+    for candidate in candidates:
+        cleaned = _cleanup_jsonish(candidate)
+        if not cleaned:
+            continue
+
+        # Strategy 1: strict JSON
+        try:
+            parsed = json.loads(cleaned)
+            plan = _normalize_architect_plan(parsed)
+            if plan:
+                return plan
+        except Exception:
+            pass
+
+        # Strategy 2: JSON-ish via python literal eval (single quotes, True/False/None)
+        try:
+            parsed = ast.literal_eval(cleaned)
+            plan = _normalize_architect_plan(parsed)
+            if plan:
+                return plan
+        except Exception:
+            pass
+
+    return None
+
+
+def _fallback_architect_plan(task: str) -> Dict[str, Any]:
+    lowered = (task or "").lower()
+    is_web = any(k in lowered for k in ["web", "website", "portfolio", "landing", "react", "next", "frontend", "ui"])
+
+    if is_web:
+        files = [
+            {"path": "README.md", "purpose": "Project setup and usage guide", "priority": 1, "dependencies": []},
+            {"path": "package.json", "purpose": "Node project scripts and dependencies", "priority": 2, "dependencies": []},
+            {"path": ".gitignore", "purpose": "Ignore build and dependency artifacts", "priority": 3, "dependencies": []},
+            {"path": "index.html", "purpose": "Main HTML entry point", "priority": 4, "dependencies": []},
+            {"path": "styles.css", "purpose": "Primary stylesheet", "priority": 5, "dependencies": ["index.html"]},
+            {"path": "app.js", "purpose": "Main client-side logic", "priority": 6, "dependencies": ["index.html"]},
+        ]
+        tech_stack = ["HTML", "CSS", "JavaScript"]
+    else:
+        files = [
+            {"path": "README.md", "purpose": "Project setup and usage guide", "priority": 1, "dependencies": []},
+            {"path": "requirements.txt", "purpose": "Python dependencies", "priority": 2, "dependencies": []},
+            {"path": ".gitignore", "purpose": "Ignore virtual env and cache files", "priority": 3, "dependencies": []},
+            {"path": "main.py", "purpose": "Main application entry point", "priority": 4, "dependencies": []},
+        ]
+        tech_stack = ["Python"]
+
+    return {
+        "project_name": "generated_project",
+        "description": str(task or "").strip(),
+        "tech_stack": tech_stack,
+        "dependencies": {},
+        "files": files,
+    }
 
 
 async def architect_phase(task: str, project_path: str) -> AsyncGenerator[Dict[str, Any], None]:
@@ -119,25 +299,29 @@ Include config files, documentation, .gitignore, package.json, etc."""
         yield {"type": "error", "data": {"message": f"Architect phase failed: {str(e)}"}}
         return
 
-    # Parse the plan from the accumulated text
-    plan = None
-    try:
-        json_match = re.search(r'```json\s*\n(.*?)```', full_text, re.DOTALL)
-        if json_match:
-            plan = json.loads(json_match.group(1))
-        else:
-            # Try raw JSON parse
-            json_start = full_text.find('{')
-            json_end = full_text.rfind('}') + 1
-            if json_start >= 0 and json_end > json_start:
-                plan = json.loads(full_text[json_start:json_end])
-    except json.JSONDecodeError:
-        pass
+    # Parse the plan from the accumulated text using robust JSON-ish strategies.
+    plan = parse_architect_plan(full_text)
 
     if plan:
         yield {"type": "log", "data": {"phase": "architect_done", "message": f"Plan generated: {len(plan.get('files', []))} files", "plan": plan}}
     else:
-        yield {"type": "error", "data": {"message": "Failed to parse architect plan as JSON"}}
+        fallback = _fallback_architect_plan(task)
+        yield {
+            "type": "log",
+            "data": {
+                "phase": "architect_parse_fallback",
+                "message": "Architect output was not valid JSON. Using fallback project plan.",
+            },
+        }
+        yield {
+            "type": "log",
+            "data": {
+                "phase": "architect_done",
+                "message": f"Fallback plan generated: {len(fallback.get('files', []))} files",
+                "plan": fallback,
+                "fallback_used": True,
+            },
+        }
 
 
 async def coder_phase(plan: dict, project_path: str, context: str = "") -> AsyncGenerator[Dict[str, Any], None]:

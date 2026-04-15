@@ -1224,11 +1224,18 @@ input, textarea { font-family: inherit; }
 
 .git-history-controls {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 6px;
   margin-bottom: 8px;
   min-width: 0;
+}
+
+.git-history-controls-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .git-search-wrap {
@@ -1272,6 +1279,7 @@ input, textarea { font-family: inherit; }
   overflow-y: auto;
   overflow-x: hidden;
   padding-right: 2px;
+  scrollbar-gutter: stable;
 }
 
 .git-empty--inline {
@@ -1339,7 +1347,7 @@ input, textarea { font-family: inherit; }
 }
 
 .git-commit {
-  padding: 8px;
+  padding: 9px;
   border-radius: 6px;
   background: var(--bg-surface);
   border: 1px solid var(--border);
@@ -1406,7 +1414,11 @@ input, textarea { font-family: inherit; }
   font-size: 11px;
   color: var(--text-2);
   margin-top: 4px;
-  line-height: 1.4;
+  line-height: 1.38;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .git-ref-list {
@@ -1475,6 +1487,616 @@ input, textarea { font-family: inherit; }
   font-size: 10px;
   color: var(--text-4);
   text-align: center;
+}
+
+.gitviz-shell {
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.gitviz-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-hover);
+  min-width: 0;
+}
+
+.gitviz-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-2);
+  font-weight: 700;
+  min-width: 0;
+}
+
+.gitviz-title-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gitviz-branch {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gitviz-subhead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(15, 23, 42, 0.35);
+  font-size: 10px;
+  color: var(--text-4);
+}
+
+.gitviz-list {
+  max-height: 220px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.gitviz-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: flex-start;
+  padding: 7px 8px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+}
+
+.gitviz-row:last-child {
+  border-bottom: none;
+}
+
+.gitviz-rails {
+  position: relative;
+  min-height: 34px;
+}
+
+.gitviz-rail {
+  position: absolute;
+  top: -7px;
+  bottom: -7px;
+  width: 1px;
+  background: rgba(148, 163, 184, 0.35);
+}
+
+.gitviz-rail.active {
+  background: linear-gradient(180deg, var(--accent), rgba(59, 130, 246, 0.2));
+}
+
+.gitviz-dot {
+  position: absolute;
+  top: 12px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  background: var(--bg-main);
+}
+
+.gitviz-dot.is-head {
+  border-color: var(--green);
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.18);
+}
+
+.gitviz-dot.is-merge {
+  border-color: var(--amber);
+}
+
+.gitviz-meta {
+  min-width: 0;
+}
+
+.gitviz-topline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.gitviz-hash {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.gitviz-date {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-4);
+}
+
+.gitviz-refs {
+  margin-top: 4px;
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.gitviz-ref {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 6px;
+  font-size: 9px;
+  color: var(--text-3);
+  background: var(--bg-base);
+}
+
+.gitviz-message {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-2);
+  line-height: 1.35;
+}
+
+.gitviz-error,
+.rag-error {
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.08);
+  color: #fca5a5;
+}
+
+.gitviz-empty {
+  padding: 10px;
+  font-size: 11px;
+  color: var(--text-4);
+}
+
+.rag-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rag-subtitle {
+  font-size: 11px;
+  color: var(--text-4);
+  line-height: 1.4;
+}
+
+.rag-input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+  border-radius: 8px;
+  color: var(--text-2);
+  padding: 7px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  outline: none;
+}
+
+.rag-input:focus {
+  border-color: var(--accent);
+}
+
+.rag-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rag-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+
+.rag-controls {
+  display: grid;
+  gap: 8px;
+}
+
+.rag-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-4);
+  font-weight: 700;
+}
+
+.rag-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rag-status {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.rag-progress-wrap {
+  display: grid;
+  gap: 6px;
+}
+
+.rag-progress-track {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.45);
+  overflow: hidden;
+}
+
+.rag-progress-fill {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, var(--accent), #60a5fa);
+  transition: width 280ms ease;
+}
+
+.rag-progress-fill.is-active {
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.35);
+}
+
+.rag-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 10px;
+  color: var(--text-4);
+}
+
+.rag-hint {
+  font-size: 11px;
+  color: var(--text-4);
+  border: 1px dashed rgba(148, 163, 184, 0.3);
+  background: rgba(15, 23, 42, 0.2);
+  border-radius: 8px;
+  padding: 7px 9px;
+}
+
+.rag-query {
+  width: 100%;
+  min-height: 88px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+  color: var(--text-1);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 8px;
+  resize: vertical;
+}
+
+.rag-query:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.25);
+}
+
+.rag-results {
+  display: grid;
+  gap: 8px;
+}
+
+.rag-results-meta {
+  font-size: 10px;
+  color: var(--text-4);
+}
+
+.rag-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  padding: 8px;
+}
+
+.rag-card-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rag-path {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--accent);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rag-score {
+  font-size: 10px;
+  color: var(--text-3);
+  font-weight: 700;
+}
+
+.rag-snippet {
+  margin-top: 6px;
+  white-space: pre-wrap;
+  overflow: auto;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: var(--bg-base);
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1.45;
+  padding: 8px;
+}
+
+.rag-placeholder {
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 11px;
+  color: var(--text-4);
+  background: rgba(15, 23, 42, 0.2);
+}
+
+.connectors-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.connectors-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.connectors-head-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.connectors-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text-1);
+}
+
+.connectors-count {
+  font-size: 10px;
+  color: var(--text-3);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-weight: 700;
+}
+
+.connectors-note {
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.45;
+}
+
+.connectors-create {
+  display: grid;
+  gap: 10px;
+}
+
+.connectors-guide {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.connectors-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.connectors-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  background: var(--bg-elevated);
+}
+
+.connectors-badge.is-ready {
+  border-color: rgba(16, 185, 129, 0.45);
+  color: #6ee7b7;
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.connectors-badge.is-missing {
+  border-color: rgba(245, 158, 11, 0.5);
+  color: #fcd34d;
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.connectors-guide-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.connectors-guide-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.22);
+  padding: 8px;
+}
+
+.connectors-guide-title {
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--text-1);
+  margin-bottom: 5px;
+}
+
+.connectors-guide-list {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--text-3);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.connectors-code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--accent);
+  border: 1px dashed rgba(59, 130, 246, 0.45);
+  border-radius: 8px;
+  background: rgba(59, 130, 246, 0.08);
+  padding: 8px;
+  overflow-wrap: anywhere;
+}
+
+.connectors-subtle {
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.45;
+}
+
+.connectors-status {
+  border: 1px solid rgba(59, 130, 246, 0.42);
+  background: rgba(59, 130, 246, 0.12);
+  color: #bfdbfe;
+  border-radius: 8px;
+  padding: 9px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.connectors-status--success {
+  border-color: rgba(16, 185, 129, 0.42);
+  background: rgba(16, 185, 129, 0.12);
+  color: #86efac;
+}
+
+.connectors-status--error {
+  border-color: rgba(239, 68, 68, 0.42);
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+}
+
+.connectors-list {
+  display: grid;
+  gap: 10px;
+}
+
+.connectors-item {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border-color: rgba(148, 163, 184, 0.2);
+}
+
+.connectors-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.connectors-item-title {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text-1);
+}
+
+.connectors-item-meta {
+  font-size: 10px;
+  color: var(--text-3);
+  margin-top: 2px;
+}
+
+.connectors-state {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-3);
+  padding: 2px 8px;
+  text-transform: lowercase;
+}
+
+.connectors-state--connected,
+.connectors-state--ok {
+  border-color: rgba(16, 185, 129, 0.4);
+  background: rgba(16, 185, 129, 0.12);
+  color: #86efac;
+}
+
+.connectors-state--degraded,
+.connectors-state--error,
+.connectors-state--failed {
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+}
+
+.connectors-state--disconnected,
+.connectors-state--needs_auth {
+  border-color: rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.12);
+  color: #fcd34d;
+}
+
+.connectors-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.connectors-item-result {
+  font-size: 11px;
+  color: var(--text-3);
+  border: 1px dashed rgba(148, 163, 184, 0.34);
+  border-radius: 6px;
+  padding: 8px;
+  background: rgba(15, 23, 42, 0.2);
+}
+
+@media (min-width: 980px) {
+  .connectors-guide-grid {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 /* ─── Diff Viewer ───────────────────────────────────────────────────────────── */

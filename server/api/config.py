@@ -39,6 +39,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "providers": {
         "openrouter": {"enabled": False, "api_key_env": "OPENROUTER_API_KEY"},
+        "github": {
+            "enabled": True,
+            "oauth_client_id": "",
+            "oauth_client_secret": "",
+        },
+        "google_drive": {
+            "enabled": True,
+            "oauth_client_id": "",
+            "oauth_client_secret": "",
+        },
     },
     "routing": {
         "prefer_local": True,

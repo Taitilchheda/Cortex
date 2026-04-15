@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
    GitBranch,
    GitCommit,
@@ -27,6 +27,7 @@ import {
    pullGit,
    pushGit,
 } from '../lib/api';
+import GitVisualizer from './GitVisualizer';
 
 type ChangeFilter = 'all' | 'staged' | 'modified' | 'untracked' | 'conflict';
 type HistoryFilter = 'all' | 'merge' | 'regular';
@@ -89,10 +90,17 @@ export default function GitDashboard({ globalSearchQuery = '' }: GitDashboardPro
    const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all');
    const [historySort, setHistorySort] = useState<HistorySort>('newest');
    const [historySearch, setHistorySearch] = useState('');
-   const [historyLimit, setHistoryLimit] = useState(20);
+   const [historyLimit, setHistoryLimit] = useState(10);
    const [showGraph, setShowGraph] = useState(false);
+   const [showVisualizer, setShowVisualizer] = useState(false);
+   const [showRefBadges, setShowRefBadges] = useState(false);
    const [commitMessage, setCommitMessage] = useState('');
    const [actionBusy, setActionBusy] = useState<string | null>(null);
+
+   const errMessage = (err: unknown, fallback: string) => {
+      if (err instanceof Error && err.message) return err.message;
+      return fallback;
+   };
 
    useEffect(() => {
       if (typeof window !== 'undefined') {
@@ -102,7 +110,7 @@ export default function GitDashboard({ globalSearchQuery = '' }: GitDashboardPro
       }
    }, []);
 
-  const fetchStatus = async () => {
+  const fetchStatus = useCallback(async () => {
     setLoading(true);
     try {
          if (!repoPath) return;
@@ -111,18 +119,16 @@ export default function GitDashboard({ globalSearchQuery = '' }: GitDashboardPro
             throw new Error(data?.detail || 'Unable to read repository status');
          }
          setStatus(data);
-         if (!checkoutTarget) {
-            setCheckoutTarget(data.branch || '');
-         }
-      } catch (err: any) {
-         toast.error('Failed to sync Git status', { description: err?.message || 'Unknown git error' });
+         setCheckoutTarget((prev) => prev || data.branch || '');
+      } catch (err) {
+         toast.error('Failed to sync Git status', { description: errMessage(err, 'Unknown git error') });
       }
     setLoading(false);
-  };
+  }, [repoPath]);
 
    useEffect(() => {
-      if (repoPath) fetchStatus();
-   }, [repoPath]);
+      if (repoPath) void fetchStatus();
+   }, [repoPath, fetchStatus]);
 
    useEffect(() => {
       if (status?.branch) {
@@ -144,17 +150,17 @@ export default function GitDashboard({ globalSearchQuery = '' }: GitDashboardPro
       }
    };
 
-   const runGitAction = async (label: string, action: () => Promise<any>, success: string) => {
+   const runGitAction = async (label: string, action: () => Promise<Record<string, unknown>>, success: string) => {
       setActionBusy(label);
       try {
          const response = await action();
          if (response?.detail) {
-            throw new Error(response.detail);
+            throw new Error(String(response.detail));
          }
          toast.success(success);
          await fetchStatus();
-      } catch (err: any) {
-         toast.error(label, { description: err?.message || 'Git action failed' });
+      } catch (err) {
+         toast.error(label, { description: errMessage(err, 'Git action failed') });
       } finally {
          setActionBusy(null);
       }
@@ -449,26 +455,38 @@ export default function GitDashboard({ globalSearchQuery = '' }: GitDashboardPro
                   />
                </label>
 
-               <select className="git-select" value={historyFilter} onChange={(e) => setHistoryFilter(e.target.value as HistoryFilter)}>
-                  <option value="all">All</option>
-                  <option value="merge">Merges</option>
-                  <option value="regular">Regular</option>
-               </select>
+               <div className="git-history-controls-row">
+                  <select className="git-select" value={historyFilter} onChange={(e) => setHistoryFilter(e.target.value as HistoryFilter)}>
+                     <option value="all">All</option>
+                     <option value="merge">Merges</option>
+                     <option value="regular">Regular</option>
+                  </select>
 
-               <select className="git-select" value={historyLimit} onChange={(e) => setHistoryLimit(Number(e.target.value) || 20)}>
-                  <option value={10}>10</option>
-                  <option value={20}>20</option>
-                  <option value={40}>40</option>
-               </select>
+                  <select className="git-select" value={historyLimit} onChange={(e) => setHistoryLimit(Number(e.target.value) || 10)}>
+                     <option value={10}>10</option>
+                     <option value={20}>20</option>
+                     <option value={40}>40</option>
+                  </select>
 
-               <button className="btn btn--sm" onClick={() => setHistorySort((s) => (s === 'newest' ? 'oldest' : 'newest'))}>
-                  <ArrowUpDown size={12} /> {historySort === 'newest' ? 'Newest' : 'Oldest'}
-               </button>
+                  <button className="btn btn--sm" onClick={() => setHistorySort((s) => (s === 'newest' ? 'oldest' : 'newest'))}>
+                     <ArrowUpDown size={12} /> {historySort === 'newest' ? 'Newest' : 'Oldest'}
+                  </button>
 
-               <button className={`btn btn--sm ${showGraph ? '' : 'btn--secondary'}`} onClick={() => setShowGraph((v) => !v)}>
-                  <CircleDashed size={12} /> {showGraph ? 'Graph On' : 'Graph Off'}
-               </button>
+                  <button className={`btn btn--sm ${showGraph ? '' : 'btn--secondary'}`} onClick={() => setShowGraph((v) => !v)}>
+                     <CircleDashed size={12} /> {showGraph ? 'Graph' : 'No Graph'}
+                  </button>
+
+                  <button className={`btn btn--sm ${showRefBadges ? '' : 'btn--secondary'}`} onClick={() => setShowRefBadges((v) => !v)}>
+                     {showRefBadges ? 'Refs On' : 'Refs Off'}
+                  </button>
+
+                  <button className={`btn btn--sm ${showVisualizer ? '' : 'btn--secondary'}`} onClick={() => setShowVisualizer((v) => !v)}>
+                     <GitBranch size={12} /> {showVisualizer ? 'Visualizer On' : 'Visualizer Off'}
+                  </button>
+               </div>
             </div>
+
+            {showVisualizer && <GitVisualizer repoPath={repoPath} limit={Math.max(40, historyLimit * 4)} />}
 
             <div className={`git-history-list ${showGraph ? 'git-history-list--graph' : ''}`}>
                {visibleCommits.length === 0 && <div className="git-empty">No commits in this filter</div>}
@@ -501,9 +519,9 @@ export default function GitDashboard({ globalSearchQuery = '' }: GitDashboardPro
 
                            <div className="commit-msg">{c.msg}</div>
 
-                           {badges.length > 0 && (
+                           {showRefBadges && badges.length > 0 && (
                               <div className="git-ref-list">
-                                 {badges.slice(0, 4).map((b) => (
+                                 {badges.slice(0, 2).map((b) => (
                                     <button
                                        key={b}
                                        className={`git-ref-badge ${b.includes('HEAD ->') ? 'is-head' : ''}`}

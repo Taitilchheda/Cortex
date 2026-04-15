@@ -7,6 +7,7 @@ import json
 import uuid
 import time
 import os
+import re
 import aiosqlite
 from typing import Dict, List, Optional, Any
 
@@ -261,15 +262,59 @@ async def search_project_context(project_root: str, query: str, limit: int = 5) 
     """Search project index for relevant file snippets based on a query."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        # Search using BM25-like rank if possible, fallback to standard match
-        cursor = await db.execute("""
-            SELECT path, content FROM project_index 
-            WHERE project_root = ? AND content MATCH ? 
-            LIMIT ?
-        """, (project_root, f'"{query}"*', limit))
-        results = []
-        async for row in cursor:
-            results.append({"path": row[0], "content": row[1]})
+        safe_limit = max(1, min(int(limit or 5), 50))
+
+        # Build a robust MATCH expression from query tokens.
+        raw = str(query or "").strip()
+        tokens = [
+            t.lower()
+            for t in re.findall(r"[A-Za-z0-9_]+", raw)
+            if len(t) >= 2
+        ][:10]
+
+        if not tokens:
+            return []
+
+        # OR matching improves recall for natural language queries.
+        match_expr = " OR ".join(f"{t}*" for t in tokens)
+        results: List[Dict[str, str]] = []
+
+        try:
+            cursor = await db.execute(
+                """
+                SELECT path, content
+                FROM project_index
+                WHERE project_root = ? AND content MATCH ?
+                LIMIT ?
+                """,
+                (project_root, match_expr, safe_limit),
+            )
+            async for row in cursor:
+                results.append({"path": row[0], "content": row[1]})
+        except aiosqlite.Error:
+            results = []
+
+        if results:
+            return results
+
+        # Fallback for edge cases where FTS syntax still yields no/invalid matches.
+        try:
+            like_clauses = " OR ".join(["LOWER(content) LIKE ?" for _ in tokens])
+            params = [project_root, *[f"%{t}%" for t in tokens], safe_limit]
+            cursor = await db.execute(
+                f"""
+                SELECT path, content
+                FROM project_index
+                WHERE project_root = ? AND {like_clauses}
+                LIMIT ?
+                """,
+                params,
+            )
+            async for row in cursor:
+                results.append({"path": row[0], "content": row[1]})
+        except aiosqlite.Error:
+            return []
+
         return results
 
 async def clear_project_index(project_root: str) -> None:

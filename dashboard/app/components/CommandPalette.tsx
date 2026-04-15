@@ -61,7 +61,7 @@ export default function CommandPalette({ sessions, onSelectSession, onNewSession
                 </Command.Item>
                 {search.trim().length > 0 && (
                   <Command.Item onSelect={() => runCommand(() => onGlobalSearch(search.trim()))}>
-                    🔍 Search for "{search.trim()}"
+                    🔍 Search for &quot;{search.trim()}&quot;
                   </Command.Item>
                 )}
               </Command.Group>

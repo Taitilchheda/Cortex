@@ -54,7 +54,20 @@ export interface FileAttachment {
 
 export interface BuildEvent {
   type: string;
-  [key: string]: any;
+  phase?: string;
+  message?: string;
+  line?: string;
+  path?: string;
+  rel_path?: string;
+  size?: number;
+  old_content?: string;
+  new_content?: string;
+  delta?: string;
+  plan?: {
+    files?: unknown[];
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
 }
 
 export type AgentMode = 'chat' | 'build' | 'refactor';
@@ -168,4 +181,113 @@ export interface RouterMetrics {
   approval_blocks: number;
   quality_feedback: { up: number; down: number };
   confidence_threshold: number;
+}
+
+export interface GitVisualizerNode {
+  hash: string;
+  author: string;
+  date: string;
+  message: string;
+  lane: number;
+  refs: string[];
+  is_head: boolean;
+  is_merge: boolean;
+  parents: string[];
+  graph?: string;
+}
+
+export interface GitVisualizerPayload {
+  branch: string;
+  repo_path: string;
+  lanes: number;
+  count: number;
+  nodes: GitVisualizerNode[];
+  generated_at: number;
+}
+
+export interface RagContextResult {
+  path: string;
+  score: number;
+  snippet: string;
+  bytes: number;
+}
+
+export interface RagContextPayload {
+  engine: string;
+  project_path: string;
+  query: string;
+  count: number;
+  results: RagContextResult[];
+}
+
+export interface RagStatusPayload {
+  engine: string;
+  project_path: string;
+  status: 'idle' | 'queued' | 'in_progress' | 'complete' | 'error' | string;
+  indexed_files: number;
+  total_candidates: number;
+  processed_candidates: number;
+  skipped_files: number;
+  progress_percent: number;
+  elapsed_seconds: number;
+  eta_seconds: number | null;
+  is_indexing: boolean;
+  started_at?: number | null;
+  finished_at?: number | null;
+  message?: string;
+}
+
+export interface ConnectorConfigField {
+  key: string;
+  label: string;
+  type: 'text' | 'password' | 'number' | string;
+  required?: boolean;
+  secret?: boolean;
+  placeholder?: string;
+}
+
+export interface ConnectorProvider {
+  key: string;
+  name: string;
+  description?: string;
+  auth_type?: string;
+  oauth_ready?: boolean;
+  oauth_setup_message?: string;
+  supports_read: boolean;
+  supports_write: boolean;
+  capabilities: string[];
+  config_fields?: ConnectorConfigField[];
+}
+
+export interface ConnectorRecord {
+  id: string;
+  type: string;
+  name: string;
+  status: string;
+  mode: string;
+  config: Record<string, unknown>;
+  scopes: string[];
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ConnectorActionResult {
+  ok: boolean;
+  status: string;
+  message?: string;
+  error?: string;
+  data?: Record<string, unknown>;
+}
+
+export interface OAuthServerProviderSetup {
+  provider: string;
+  enabled: boolean;
+  has_client_id: boolean;
+  has_client_secret: boolean;
+  oauth_ready: boolean;
+  oauth_setup_message: string;
+}
+
+export interface OAuthServerSetupPayload {
+  providers: Record<string, OAuthServerProviderSetup>;
 }

@@ -1,6 +1,8 @@
 # Next.js
 dashboard/node_modules/
 dashboard/.next/
+dashboard/.turbo/
+dashboard/.swc/
 dashboard/out/
 dashboard/build/
 dashboard/*.log
@@ -9,6 +11,12 @@ dashboard/*.log
 **/__pycache__/
 *.py[cod]
 *$py.class
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
 server/__pycache__/
 server/*.py[cod]
 server/*$py.class
@@ -27,8 +35,19 @@ server/coverage.xml
 server/*.mo
 server/*.pot
 server/*.log
+server/*.db-journal
+server/*.sqlite-journal
 server/data/*.db
 server/data/*.sqlite
+
+# Cortex local state
+.cortex/
+.cortex/environments/
+.cortex/memory/
+.cortex/plugins/
+server/mission_control.db-journal
+*.db-journal
+*.sqlite-journal
 
 # Local development and OS files
 .DS_Store
@@ -39,6 +58,8 @@ Thumbs.db
 *.dylib
 .vscode/
 .idea/
+.env
+.env.*
 .gemini/
 .agent/
 .agents/

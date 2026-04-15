@@ -32,6 +32,8 @@ class ConnectorProvider(ABC):
     name: str = "Base Connector"
     supports_read: bool = True
     supports_write: bool = False
+    description: str = ""
+    auth_type: str = "config"
 
     @abstractmethod
     async def connect(self, ctx: ConnectorContext) -> ConnectorResult:
@@ -62,3 +64,8 @@ class ConnectorProvider(ABC):
         if self.supports_write:
             caps.append("write_item")
         return caps
+
+    @property
+    def config_fields(self) -> List[Dict[str, Any]]:
+        """Field schema that frontend can use to render provider setup forms dynamically."""
+        return []

@@ -51,6 +51,16 @@ import { toast } from 'sonner';
 
 type DesktopLayoutVariant = 'with-left' | 'without-left';
 
+interface SessionEvent {
+  type: string;
+  data?: Record<string, unknown>;
+  timestamp?: number;
+}
+
+interface SessionDetails extends Session {
+  events?: SessionEvent[];
+}
+
 const PANEL_LAYOUT_STORAGE_PREFIX = 'cortex-desktop-layout-v1';
 const DEFAULT_DESKTOP_LAYOUTS: Record<DesktopLayoutVariant, Layout> = {
   'with-left': {
@@ -244,53 +254,63 @@ export default function Cortex() {
     setMessages([]);
 
     try {
-      const full = await fetchSession(id);
+      const full = await fetchSession(id) as SessionDetails;
       setActiveSession(full);
 
       if (full.type === 'build' || full.type === 'refactor') {
         setShowAgent(true);
-        const events: BuildEvent[] = (full.events || []).map((e: any) => ({
-          type: e.type, ...e.data
+        const events: BuildEvent[] = (full.events || []).map((e) => ({
+          type: e.type,
+          ...(e.data || {}),
         }));
         setBuildEvents(events);
 
         // Reconstruct architect text
         const archText = events
-          .filter((e: any) => e.type === 'architect_stream')
-          .map((e: any) => e.delta || '')
+          .filter((e) => e.type === 'architect_stream')
+          .map((e) => (typeof e.delta === 'string' ? e.delta : ''))
           .join('');
         setArchitectText(archText);
 
-        const fc = events.filter((e: any) => e.type === 'file_created').length;
+        const fc = events.filter((e) => e.type === 'file_created').length;
         setFileCount(fc);
         setDoneFiles(fc);
 
         // Find total from log event
-        const planLog = events.find((e: any) => e.type === 'log' && e.phase === 'architect_done');
-        if (planLog?.plan?.files) setTotalFiles(planLog.plan.files.length);
+        const planLog = events.find((e) => e.type === 'log' && e.phase === 'architect_done');
+        if (Array.isArray(planLog?.plan?.files)) setTotalFiles(planLog.plan.files.length);
 
         // Check if complete
-        const isDone = events.some((e: any) => e.type === 'log' && e.phase === 'complete');
+        const isDone = events.some((e) => e.type === 'log' && e.phase === 'complete');
         setBuildComplete(isDone);
       } else {
         // Rebuild chat messages from events
         const msgs: ChatMessage[] = [];
         // Replay full chat flow from events.
         for (const ev of full.events || []) {
-          if (ev.type === 'chat_start' && ev.data?.task) {
+          const data = ev.data || {};
+          const timestamp = typeof ev.timestamp === 'number' ? ev.timestamp : Date.now() / 1000;
+
+          if (ev.type === 'chat_start' && typeof data.task === 'string' && data.task) {
             msgs.push({
               id: uid(),
               role: 'user',
-              content: ev.data.task,
-              timestamp: ev.timestamp || Date.now() / 1000,
+              content: data.task,
+              timestamp,
             });
           }
           if (ev.type === 'chat_response') {
+            const model = typeof data.model === 'string' ? data.model : undefined;
+            const content = typeof data.content === 'string' ? data.content : '';
+            const tokens = typeof data.tokens === 'number' ? data.tokens : undefined;
             msgs.push({
-              id: uid(), role: 'assistant', content: ev.data?.content || '',
-              timestamp: ev.timestamp || Date.now() / 1000,
-              mode: ev.data?.model, model: ev.data?.model,
-              tokens: ev.data?.tokens,
+              id: uid(),
+              role: 'assistant',
+              content,
+              timestamp,
+              mode: model,
+              model,
+              tokens,
             });
           }
         }
@@ -1005,7 +1025,7 @@ export default function Cortex() {
                       {!ollamaOk && (
                         <div className="status-warning-box">
                           <AlertCircle size={14} />
-                          <span>Ollama is not responding. Ensure it's running on port 11434.</span>
+                          <span>Ollama is not responding. Ensure it&apos;s running on port 11434.</span>
                         </div>
                       )}
                     </div>

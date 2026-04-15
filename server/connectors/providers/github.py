@@ -17,6 +17,8 @@ class GitHubConnector(ConnectorProvider):
     name = "GitHub"
     supports_read = True
     supports_write = False
+    description = "Connect a user's GitHub account using OAuth redirect and consent."
+    auth_type = "oauth2"
 
     async def connect(self, ctx: ConnectorContext) -> ConnectorResult:
         token = resolve_secret(ctx.config, "token", "GITHUB_TOKEN_ENV")
@@ -24,7 +26,7 @@ class GitHubConnector(ConnectorProvider):
             return ConnectorResult(
                 ok=False,
                 status="needs_auth",
-                error="Missing GitHub token. Set config.token or GITHUB_TOKEN env ref.",
+                error="GitHub authorization required. Use Login with GitHub in the Connectors panel.",
             )
         return ConnectorResult(ok=True, status="connected", message="GitHub token configured")
 

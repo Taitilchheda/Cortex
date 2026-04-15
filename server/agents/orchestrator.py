@@ -711,6 +711,23 @@ async def run_chat(
     confidence_val = float(router_decision.get("confidence", 1.0 if not auto_mode else 0.0))
     _record_router_metric(resolved_mode, confidence_val, auto_mode, fallback_applied)
 
+    # Persist the prompt intent immediately so history survives downstream failures.
+    chat_start_data = {
+        "mode": resolved_mode,
+        "requested_mode": requested_mode or "auto",
+        "auto_mode": auto_mode,
+        "support_roles": support_roles,
+        "router_confidence": round(confidence_val, 3),
+        "router_fallback": fallback_applied,
+        "router_reason": router_reason,
+        "router_keywords": router_keywords,
+        "quality_tier": effective_quality_tier,
+        "latency_budget_ms": effective_latency_budget_ms,
+        "model": model,
+        "task": task,
+    }
+    await add_event(session_id, "chat_start", chat_start_data)
+
     risk = _risk_score(task, mode=resolved_mode, role=resolved_mode)
     if risk >= 0.7 and not approved_actions:
         _router_metrics["approval_blocks"] = int(_router_metrics.get("approval_blocks", 0)) + 1
@@ -875,24 +892,6 @@ async def run_chat(
     messages.append({"role": "user", "content": user_content})
 
     add_to_conversation(session_id, "user", user_content)
-    await add_event(
-        session_id,
-        "chat_start",
-        {
-            "mode": resolved_mode,
-            "requested_mode": requested_mode or "auto",
-            "auto_mode": auto_mode,
-            "support_roles": support_roles,
-            "router_confidence": round(confidence_val, 3),
-            "router_fallback": fallback_applied,
-            "router_reason": router_reason,
-            "router_keywords": router_keywords,
-            "quality_tier": effective_quality_tier,
-            "latency_budget_ms": effective_latency_budget_ms,
-            "model": model,
-            "task": task,
-        },
-    )
 
     full_response = ""
     try:

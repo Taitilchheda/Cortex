@@ -17,11 +17,15 @@ import {
   Binary, 
   HardDrive,
   Globe2,
-  List
+  List,
+  Database,
+  Link2
 } from 'lucide-react';
 import CodeOutline from './CodeOutline';
 import ModelPicker from './ModelPicker';
 import HardwareDashboard from './HardwareDashboard';
+import RagContextEngine from './RagContextEngine';
+import ConnectorsPanel from './ConnectorsPanel';
 
 interface RightPanelProps {
   activeSession: Session | null;
@@ -35,7 +39,52 @@ interface RightPanelProps {
 }
 
 type TabKey = 'context' | 'monitor' | 'advisor' | 'settings' | 'api' | 'tools' | 'outline';
-type ExtendedTabKey = TabKey | 'queue';
+type ExtendedTabKey = TabKey | 'queue' | 'rag' | 'connectors';
+
+interface RecommendationModel {
+  model: string;
+  rank?: string;
+  specialty?: string;
+  quality_score?: number | string | null;
+  humaneval?: number | string | null;
+  runtime_vram_gb?: number | string | null;
+  fits_vram?: boolean;
+  needs_ram_offload?: boolean;
+  benchmark_source?: string;
+  [key: string]: unknown;
+}
+
+interface RecommendationResponse {
+  detail?: unknown;
+  error?: string;
+  data_sources?: {
+    engine?: string;
+    model_database?: string;
+    scoring?: string;
+    binary?: string;
+    [key: string]: unknown;
+  };
+  llmfit_binary?: string;
+  models?: RecommendationModel[];
+  [key: string]: unknown;
+}
+
+interface FeatureHealthResponse {
+  features?: {
+    memory?: boolean;
+    web_search?: boolean;
+    git?: boolean;
+    local_only?: boolean;
+    queue?: boolean;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+interface ContractHealthResponse {
+  contracts?: unknown;
+  [key: string]: unknown;
+}
 
 const API_ENDPOINTS = [
   { method: 'GET', path: '/', desc: 'Server info + Ollama status' },
@@ -47,6 +96,8 @@ const API_ENDPOINTS = [
   { method: 'GET', path: '/v1/models', desc: 'Model list' },
   { method: 'GET', path: '/models/catalog', desc: 'Unified local/cloud catalog' },
   { method: 'GET', path: '/hardware/stats', desc: 'Hardware telemetry snapshot' },
+  { method: 'GET', path: '/git/visualizer', desc: 'Commit lanes for Git Visualizer' },
+  { method: 'POST', path: '/rag/context', desc: 'RAG context retrieval from project index' },
 ];
 
 const ROLES = ['architect', 'coder', 'debug', 'quick', 'explain', 'review'];
@@ -58,7 +109,7 @@ export default function RightPanel({
   const [vram, setVram] = useState('12');
   const [ram, setRam] = useState('32');
   const [priority, setPriority] = useState('balanced');
-  const [recommendation, setRecommendation] = useState<any>(null);
+  const [recommendation, setRecommendation] = useState<RecommendationResponse | null>(null);
   const [models, setModels] = useState<string[]>([]);
   const [router, setRouter] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -70,8 +121,8 @@ export default function RightPanel({
   const [protectedPathsText, setProtectedPathsText] = useState('');
   const [prefProjectPath, setPrefProjectPath] = useState('');
   const [prefDefaultMode, setPrefDefaultMode] = useState('chat');
-  const [featureHealth, setFeatureHealth] = useState<any>(null);
-  const [contractHealth, setContractHealth] = useState<any>(null);
+  const [featureHealth, setFeatureHealth] = useState<FeatureHealthResponse | null>(null);
+  const [contractHealth, setContractHealth] = useState<ContractHealthResponse | null>(null);
   const [toolRegistry, setToolRegistry] = useState<ToolRegistryItem[]>([]);
   const [toolConfig, setToolConfig] = useState<Record<string, boolean>>({});
   const [toolSaving, setToolSaving] = useState(false);
@@ -94,7 +145,20 @@ export default function RightPanel({
   };
 
   useEffect(() => {
-    fetchModels().then(d => setModels(d.data?.map((m: any) => m.id) || [])).catch(() => {});
+    fetchModels().then(d => {
+      const raw = (d as { data?: unknown }).data;
+      const rows = Array.isArray(raw) ? raw : [];
+      const nextModels = rows
+        .map((m) => {
+          if (typeof m === 'object' && m !== null && 'id' in m) {
+            const id = (m as { id?: unknown }).id;
+            return typeof id === 'string' ? id : '';
+          }
+          return '';
+        })
+        .filter(Boolean);
+      setModels(nextModels);
+    }).catch(() => {});
     fetchRouter().then(d => setRouter(d.router || {})).catch(() => {});
     fetchAgentSettings().then(d => {
       setSettings(d);
@@ -139,9 +203,15 @@ export default function RightPanel({
     }
 
     try {
-      const r = await fetchRecommendations(parsedVram, parsedRam, priority);
+      const r = await fetchRecommendations(parsedVram, parsedRam, priority) as RecommendationResponse;
       const detailError = Array.isArray(r?.detail)
-        ? r.detail.map((d: any) => d?.msg || JSON.stringify(d)).join('; ')
+        ? r.detail.map((d) => {
+            if (typeof d === 'object' && d !== null && 'msg' in d) {
+              const msg = (d as { msg?: unknown }).msg;
+              return typeof msg === 'string' ? msg : JSON.stringify(d);
+            }
+            return JSON.stringify(d);
+          }).join('; ')
         : (typeof r?.detail === 'string' ? r.detail : '');
       const apiError = typeof r?.error === 'string' ? r.error : detailError;
       if (apiError) {
@@ -149,9 +219,9 @@ export default function RightPanel({
       } else {
         setRecommendation(r);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       setRecommendation({
-        error: err?.message || 'Failed to run analysis. Ensure backend is running on port 8000.',
+        error: err instanceof Error ? err.message : 'Failed to run analysis. Ensure backend is running on port 8000.',
       });
     } finally {
       setLoading(false);
@@ -253,6 +323,12 @@ export default function RightPanel({
         </button>
         <button className={`lp-tab ${tab === 'queue' ? 'active' : ''}`} onClick={() => setTab('queue')} title="Queue">
           <HardDrive size={18} strokeWidth={tab === 'queue' ? 2.5 : 2} />
+        </button>
+        <button className={`lp-tab ${tab === 'connectors' ? 'active' : ''}`} onClick={() => setTab('connectors')} title="Connectors">
+          <Link2 size={18} strokeWidth={tab === 'connectors' ? 2.5 : 2} />
+        </button>
+        <button className={`lp-tab ${tab === 'rag' ? 'active' : ''}`} onClick={() => setTab('rag')} title="RAG Context">
+          <Database size={18} strokeWidth={tab === 'rag' ? 2.5 : 2} />
         </button>
         <button className={`lp-tab ${tab === 'api' ? 'active' : ''}`} onClick={() => setTab('api')} title="API Reference">
           <Plug size={18} strokeWidth={tab === 'api' ? 2.5 : 2} />
@@ -383,7 +459,7 @@ export default function RightPanel({
                 </div>
               </div>
             )}
-            {recommendation?.models?.map((m: any, i: number) => (
+            {recommendation?.models?.map((m, i) => (
               <div className="pro-card" key={i}>
                  <div className="pro-head"><span className="pro-name">{m.model}</span><span className="pro-badge">{m.rank}</span></div>
                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>{m.specialty}</div>
@@ -485,6 +561,14 @@ export default function RightPanel({
            </div>
         )}
 
+        {tab === 'rag' && (
+          <RagContextEngine activeFile={activeFile} />
+        )}
+
+        {tab === 'connectors' && (
+          <ConnectorsPanel />
+        )}
+
         {tab === 'tools' && (
           <div className="pro-card">
             <div className="card__label">AI Tools</div>
@@ -499,7 +583,7 @@ export default function RightPanel({
               </label>
             ))}
             <button className="btn--primary" onClick={saveTools} disabled={toolSaving}>{toolSaving ? 'Saving…' : 'Apply Tools'}</button>
-            {contractHealth?.contracts && (
+            {Boolean(contractHealth?.contracts) && (
               <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-4)' }}>
                 API contracts verified.
               </div>

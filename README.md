@@ -1,157 +1,113 @@
-# 🚀 Cortex
+# Cortex
 
-> **The Fully Local, Privacy-First AI Coding Workstation.**  
-> Cortex is a high-performance, multi-agent development environment designed to run 100% on your local machine. No cloud, no monthly bills, no data leaks. Just pure local intelligence.
+Cortex is a fully local, privacy-first AI coding workstation built with a Next.js dashboard, a FastAPI backend, and Ollama model execution.
 
----
+## What Is New (April 2026)
 
-## 🛠️ Core Capabilities
+- Reliability hardening for code generation:
+    - Architect plan parsing now tolerates malformed JSON-like output and falls back to a safe default plan.
+    - Specialist generation now includes retry + model failover + guaranteed emergency fallback templates.
+    - Merge-time missing-content cascades are prevented by non-empty fallback content.
+- New Connectors system:
+    - OAuth setup and login flow for GitHub and Google Drive.
+    - Additional providers: Kaggle, Google Colab, Custom Agent, and MCP.
+    - New Connectors panel in the dashboard.
+- New RAG Context Engine:
+    - Project indexing status, progress, ETA, and ranked snippet retrieval.
+    - New RAG panel in the dashboard.
+- New Git Visualizer:
+    - Backend endpoint for lane-based commit graph data.
+    - UI visualizer integrated in Git dashboard.
+- Updated packaging and repo hygiene:
+    - Expanded ignore rules for local runtime artifacts.
+    - New packaging reference guide in docs.
 
-- **🧠 Multi-Agent Orchestration**: Specialized roles (Architect, Coder, Reviewer, Debugger) working in sync.
-- **🛡️ 100% Local Intelligence**: Powered by **Ollama**. Your code never leaves your drive.
-- **⚡ Two-Phase Build Pipeline**: Complex projects are first planned by an Architect agent, then executed by a Coder agent.
-- **🔧 Built-In Refactoring**: Seamlessly refactor entire codebases using the integrated **Aider** engine.
-- **🎙️ Advanced UX**: Web Speech API input, Stop-Generation control, and a real-time build monitor.
-- **📊 Agent Telemetry**: Active feedback loops (thumbs up/down) to help the orchestrator learn from its mistakes.
+## Core Capabilities
 
----
+- Local-first multi-agent orchestration (architect, coder, debugger, reviewer, and role-routed chat).
+- Streaming build and chat workflows with session/event persistence.
+- Build pipeline with architect planning + file-level specialist generation.
+- Refactor workflow with Aider integration.
+- Connectors, queueing, project indexing, and telemetry panels.
 
-## 🏗️ System Architecture
+## Quick Start
 
-Cortex uses a decoupled **Double-N** architecture (Next.js + Node.js/Python).
+### Prerequisites
 
-### 📡 High-Level Overview
-```mermaid
-graph LR
-    User([User]) <--> Frontend[Next.js Dashboard]
-    Frontend <--> Backend[FastAPI Server]
-    Backend <--> Ollama[Ollama Local Inference]
-    Backend <--> SQLite[(SQLite State)]
-    Backend <--> FS[Local Filesystem]
-```
+1. Ollama installed and running.
+2. Python 3.10+.
+3. Node.js 18+.
 
-### ⚡ Build Cycle Phase (Architect → Coder)
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant O as Orchestrator
-    participant A as Architect Agent
-    participant C as Coder Agent
-    participant FS as Local Drive
+### Install
 
-    U->>O: Prompt: "Build a React App"
-    O->>A: Create Implementation Plan
-    A-->>O: Plan (File structure + logic)
-    O->>U: Stream Plan to UI
-    Loop For Each File in Plan
-        O->>C: Generate content for File X
-        C-->>O: File content (Streamed)
-        O->>FS: Write File to Disk
-        O->>U: Update Progress
-    End
-    O->>U: Build Complete
-```
-
-### 💬 Chat Loop (Role-Routed)
-```mermaid
-graph TD
-    P[User Prompt] --> R{Router}
-    R -->|Fix Bug| D[Debugger Agent]
-    R -->|General Code| C[Coder Agent]
-    R -->|Architecture| A[Architect Agent]
-    R -->|Explain| E[Explain Agent]
-    D --> Resp[Response + Telemetry]
-    C --> Resp
-    A --> Resp
-    E --> Resp
-    Resp --> Finish((User Feedback))
-```
-
----
-
-## 🥊 Competitive Analysis
-
-| Feature | Cortex | Cursor | GitHub Copilot | OpenAI Codex |
-|---------|-----------------|--------|----------------|--------------|
-| **Local/Private** | ✅ Yes (100%) | ❌ No | ❌ No | ❌ No |
-| **Model Choice** | ✅ Any Ollama Model | ❌ Locked | ❌ Locked | ❌ Locked |
-| **Full Build Pipeline**| ✅ (Architect+Coder) | ⚠ Partial | ❌ No | ✅ Yes |
-| **Cost** | **$0 / Free** | $20/mo | $10/mo | $200/mo |
-| **Multi-Agent Mode** | ✅ Yes | ❌ No | ❌ No | ❌ No |
-| **Speech Input** | ✅ Yes | ❌ No | ❌ No | ❌ No |
-| **Stop Generation** | ✅ Yes | ✅ Yes | ❌ No | ✅ Yes |
-| **Open Source** | ✅ Yes | ❌ No | ❌ No | ❌ No |
-
----
-
-## 🚀 Getting Started
-
-### 📋 Prerequisites
-1.  **Ollama**: [Download & Install](https://ollama.com/)
-2.  **Node.js**: v18+ 
-3.  **Python**: 3.10+
-4.  **Hardware**: 16GB+ RAM recommended (for 14B+ models)
-
-### ⚙️ Installation
-1.  **Clone the Repo**:
-    ```bash
-    git clone https://github.com/Taitilchheda/Cortex.git
-    cd Cortex
-    ```
-2.  **Automatic Setup**:
-    Run the provided install script:
-    ```bash
-    ./INSTALL.bat
-    ```
-
-### ▶️ Running the App
-Run both servers simultaneously:
 ```bash
-./START.bat
+git clone https://github.com/Taitilchheda/Cortex.git
+cd Cortex
+INSTALL.bat
 ```
-- **Frontend**: [http://localhost:3001](http://localhost:3001)
-- **Backend API**: [http://localhost:8000](http://localhost:8000)
 
-For detailed Windows, macOS, and Ubuntu startup/troubleshooting, see [docs/HOW_TO_RUN.md](./docs/HOW_TO_RUN.md).
+### Run
 
----
+```bash
+START_DEV.bat
+```
 
-## 📂 Project Structure
+Default endpoints:
+
+- Frontend: http://localhost:3001
+- Backend: http://localhost:8000
+
+## New User Documentation
+
+- Beginner usage walkthrough: [docs/USER_GUIDE.md](docs/USER_GUIDE.md)
+- Platform-specific run and troubleshooting guide: [docs/HOW_TO_RUN.md](docs/HOW_TO_RUN.md)
+- Packaging guide: [docs/PACKAGING_GUIDE.md](docs/PACKAGING_GUIDE.md)
+- Roadmap: [ROADMAP.md](ROADMAP.md)
+
+## Key API Additions
+
+- Connectors:
+    - `GET /connectors/providers`
+    - `GET/POST /connectors/oauth/server-setup`
+    - `POST /connectors/oauth/start`
+    - `GET /connectors/oauth/callback`
+- RAG:
+    - `POST /rag/index`
+    - `GET /rag/status`
+    - `POST /rag/context`
+- Git:
+    - `GET /git/visualizer`
+
+## Validation Commands
+
+```bash
+cd server
+python -m pytest -q
+
+cd ../dashboard
+npx tsc --noEmit
+npm run lint
+```
+
+## Project Layout
 
 ```text
 Cortex/
-├── dashboard/           # Next.js 16 Frontend
-│   ├── app/             # Main Application Logic
-│   │   ├── components/  # UI Elements (Chat, Sidebar, AgentOutput)
-│   │   ├── lib/         # API Client & Shared Types
-│   │   └── globals.css  # Premium Design System
-│   └── public/          # Static Assets
-├── server/              # FastAPI Backend
-│   ├── agents/          # Core AI Orchestration Logic
-│   ├── config/          # Model Routing & Recommendations
-│   ├── api/             # SQLite State & Session Management
-│   └── main.py          # Entry Point & SSE Streaming
-└── START.bat            # One-click Launch Script
+├── dashboard/                 # Next.js frontend
+│   └── app/
+│       ├── components/        # Chat/build UI, connectors, git, RAG panels
+│       └── lib/               # API client and shared types
+├── server/                    # FastAPI backend
+│   ├── agents/                # Orchestration and generation pipeline
+│   ├── api/                   # Sessions, connectors, memory, config, state
+│   └── connectors/            # Provider implementations
+├── docs/
+│   ├── HOW_TO_RUN.md
+│   ├── USER_GUIDE.md
+│   └── PACKAGING_GUIDE.md
+└── START_DEV.bat
 ```
 
----
+## License
 
-## 🗺️ Roadmap (v5.1 Pro)
-
-Cortex is evolving into a high-fidelity coding workstation. See the full [ROADMAP.md](./ROADMAP.md) for its strategic future.
-- [x] **📝 Monaco Code Editor**: Full VS Code-style editor integrated.
-- [x] **🔍 Deep Search**: Indexed message history via SQLite FTS5.
-- [x] **🧭 Breadcrumbs**: Context-aware project traversal navigation.
-- [ ] **🧠 RAG Context Engine**: Local vector search for your entire codebase.
-- [ ] **💻 Integrated Terminal**: xterm.js terminal integration for builds.
-- [ ] **🔀 Git Visualizer**: Visual branch/commit management in the UI.
-
----
-
-## 📄 License
-This project is licensed under the **MIT License**. Use it, fork it, build with it. It's free and always will be.
-
----
-
-## ✨ Developed with ❤️ by Taitilchheda
-*Making high-tier coding intelligence accessible to everyone.*
+MIT

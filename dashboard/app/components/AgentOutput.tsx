@@ -1,7 +1,7 @@
 'use client';
 import { BuildEvent } from '../lib/types';
 import { formatBytes } from '../lib/utils';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import Terminal from './Terminal';
 import DiffViewer from './DiffViewer';
 import { FileText, ChevronDown, ChevronRight, Eye } from 'lucide-react';
@@ -25,6 +25,20 @@ export default function AgentOutput({
 }: AgentOutputProps) {
   const [expandedPhases, setExpandedPhases] = useState<Set<string>>(new Set(['architect', 'coder']));
   const [showDiffMap, setShowDiffMap] = useState<Record<string, boolean>>({});
+  const [nowSec, setNowSec] = useState<number>(0);
+
+  useEffect(() => {
+    if (!isRunning || !startTime) return;
+    const tick = () => setNowSec(Date.now() / 1000);
+    const initial = window.setTimeout(tick, 0);
+    const timer = window.setInterval(() => {
+      tick();
+    }, 1000);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(timer);
+    };
+  }, [isRunning, startTime]);
 
   const toggleDiff = (path: string) => {
     setShowDiffMap(prev => ({ ...prev, [path]: !prev[path] }));
@@ -50,7 +64,7 @@ export default function AgentOutput({
   const progress = totalFiles > 0 ? Math.round((doneFiles / totalFiles) * 100) : 0;
 
   // Speed metrics
-  const elapsed = startTime ? (Date.now() / 1000) - startTime : 0;
+  const elapsed = startTime ? Math.max(0, nowSec - startTime) : 0;
   const filesPerMin = elapsed > 10 ? (doneFiles / elapsed) * 60 : 0;
   const eta = filesPerMin > 0 && totalFiles > doneFiles
     ? Math.round((totalFiles - doneFiles) / filesPerMin * 60)
@@ -59,7 +73,11 @@ export default function AgentOutput({
   const togglePhase = (phase: string) => {
     setExpandedPhases(prev => {
       const next = new Set(prev);
-      next.has(phase) ? next.delete(phase) : next.add(phase);
+      if (next.has(phase)) {
+        next.delete(phase);
+      } else {
+        next.add(phase);
+      }
       return next;
     });
   };

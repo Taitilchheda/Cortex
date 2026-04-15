@@ -1,6 +1,6 @@
 'use client';
 import { useMemo } from 'react';
-import { Box, Code, FunctionSquare, Layout, Type } from 'lucide-react';
+import { Box, FunctionSquare, Layout, Type } from 'lucide-react';
 
 interface Symbol {
   name: string;
@@ -20,7 +20,7 @@ export default function CodeOutline({ code, language, onSelectSymbol }: CodeOutl
     const lines = code.split('\n');
     
     // Simple regex matching based on language
-    const patterns: Record<string, { regex: RegExp; type: any }[]> = {
+    const patterns: Record<string, { regex: RegExp; type: Symbol['type'] }[]> = {
       'python': [
         { regex: /^\s*class\s+([A-Za-z0-9_]+)/, type: 'class' },
         { regex: /^\s*def\s+([A-Za-z0-9_]+)/, type: 'function' }
@@ -51,7 +51,7 @@ export default function CodeOutline({ code, language, onSelectSymbol }: CodeOutl
     return syms;
   }, [code, language]);
 
-  const getIcon = (type: any) => {
+  const getIcon = (type: Symbol['type']) => {
     if (type === 'class') return <Box size={14} className="icon-blue" />;
     if (type === 'function') return <FunctionSquare size={14} className="icon-violet" />;
     if (type === 'interface') return <Layout size={14} className="icon-amber" />;

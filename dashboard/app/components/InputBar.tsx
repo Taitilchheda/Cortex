@@ -19,8 +19,23 @@ import {
   StopCircle,
   X,
   FileText,
-  Image as ImageIcon
+  Image as ImageIcon,
+  type LucideIcon
 } from 'lucide-react';
+
+type SpeechRecognitionResultLike = { transcript: string };
+type SpeechRecognitionEventLike = {
+  results: ArrayLike<ArrayLike<SpeechRecognitionResultLike>>;
+};
+
+type SpeechRecognitionLike = {
+  onstart: (() => void) | null;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+};
+
+type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
 
 interface CommandBarProps {
   onSend: (text: string, mode: AgentMode, role: ChatRole, projectPath: string, attachments: FileAttachment[], selfHeal: boolean) => void;
@@ -31,13 +46,13 @@ interface CommandBarProps {
   defaultMode?: AgentMode;
 }
 
-const MODES: { key: AgentMode; icon: any; label: string; desc: string; color: string }[] = [
+const MODES: { key: AgentMode; icon: LucideIcon; label: string; desc: string; color: string }[] = [
   { key: 'chat', icon: MessageSquare, label: 'Chat', desc: 'Conversational agent', color: '#8b5cf6' },
   { key: 'build', icon: Zap, label: 'Build', desc: 'Generate a project', color: '#3b82f6' },
   { key: 'refactor', icon: Hammer, label: 'Refactor', desc: 'Bulk modify code', color: '#f59e0b' },
 ];
 
-const ROLES: { key: ChatRole; label: string; desc: string; icon: any; color: string }[] = [
+const ROLES: { key: ChatRole; label: string; desc: string; icon: LucideIcon; color: string }[] = [
   { key: 'auto', label: 'Auto', desc: 'Route by task intent', icon: Sparkles, color: '#22c55e' },
   { key: 'coder', label: 'Coder', desc: 'Writes production code', icon: Code2, color: '#3b82f6' },
   { key: 'debug', label: 'Debugger', desc: 'Finds and fixes bugs', icon: Bug, color: '#ef4444' },
@@ -65,14 +80,27 @@ export default function CommandBar({ onSend, onStop, isStreaming, contextTokens,
   const textRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  function adjustHeight() {
+    const el = textRef.current;
+    if (el) {
+      el.style.height = 'auto';
+      el.style.height = Math.min(el.scrollHeight, 180) + 'px';
+    }
+  }
+
   useEffect(() => {
-    if (defaultMode) setMode(defaultMode);
+    if (!defaultMode) return;
+    const frame = window.requestAnimationFrame(() => setMode(defaultMode));
+    return () => window.cancelAnimationFrame(frame);
   }, [defaultMode]);
 
   useEffect(() => {
     if ((mode === 'build' || mode === 'refactor') && !projectPath && typeof window !== 'undefined') {
       const remembered = localStorage.getItem('cortex-last-path') || '';
-      if (remembered) setProjectPath(remembered);
+      if (remembered) {
+        const timer = window.setTimeout(() => setProjectPath(remembered), 0);
+        return () => window.clearTimeout(timer);
+      }
     }
   }, [mode, projectPath]);
 
@@ -98,7 +126,7 @@ export default function CommandBar({ onSend, onStop, isStreaming, contextTokens,
   }, []);
 
   const handleSend = useCallback(() => {
-    let finalText = text.trim();
+    const finalText = text.trim();
     if (!finalText || isStreaming) return;
     onSend(finalText, mode, role, projectPath, attachments, selfHeal);
     setText('');
@@ -127,22 +155,20 @@ export default function CommandBar({ onSend, onStop, isStreaming, contextTokens,
 
   const removeAtt = (i: number) => setAttachments(prev => prev.filter((_, idx) => idx !== i));
 
-  const adjustHeight = () => {
-    const el = textRef.current;
-    if (el) {
-      el.style.height = 'auto';
-      el.style.height = Math.min(el.scrollHeight, 180) + 'px';
-    }
-  };
-
   const startListening = () => {
-    // @ts-ignore
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const speechWindow = window as Window & {
+      SpeechRecognition?: SpeechRecognitionCtor;
+      webkitSpeechRecognition?: SpeechRecognitionCtor;
+    };
+    const SpeechRecognition = speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition;
     if (!SpeechRecognition) return;
+
     const recognition = new SpeechRecognition();
     recognition.onstart = () => setIsListening(true);
-    recognition.onresult = (event: any) => {
-      const transcript = event.results[event.results.length - 1][0].transcript;
+    recognition.onresult = (event: SpeechRecognitionEventLike) => {
+      const lastResult = event.results[event.results.length - 1];
+      const transcript = lastResult?.[0]?.transcript || '';
+      if (!transcript) return;
       setText(prev => prev + transcript);
       adjustHeight();
     };

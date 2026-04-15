@@ -113,8 +113,9 @@ export async function streamFetch(
     if (buffer.trim()) {
       parseSSE(buffer, onEvent);
     }
-  } catch (err: any) {
-    onError?.(err.message || 'Connection failed');
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Connection failed';
+    onError?.(message);
   }
 }
 
@@ -123,7 +124,7 @@ async function get(path: string) {
   const resp = await requestWithFallback(path);
   return resp.json();
 }
-async function post(path: string, body?: any) {
+async function post(path: string, body?: unknown) {
   const resp = await requestWithFallback(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -162,17 +163,23 @@ export const writeFile = (path: string, content: string) => post('/files/write',
 export const indexProject = (projectPath: string) => post('/project/index', { project_path: projectPath });
 export const searchProject = (projectPath: string, query: string, limit = 5) =>
   post('/project/search', { project_path: projectPath, query, limit });
+export const ragIndexProject = (projectPath: string) => post('/rag/index', { project_path: projectPath });
+export const ragStatus = (projectPath: string) => get(`/rag/status?project_path=${encodeURIComponent(projectPath)}`);
+export const ragContext = (projectPath: string, query: string, limit = 8, snippetChars = 360) =>
+  post('/rag/context', { project_path: projectPath, query, limit, snippet_chars: snippetChars });
 export const fetchAgentSettings = () => get('/settings/agent');
-export const updateAgentSettings = (settings: any) => post('/settings/agent', settings);
+export const updateAgentSettings = (settings: Record<string, unknown>) => post('/settings/agent', settings);
 export const fetchNotifications = () => get('/notifications');
 export const clearNotifications = () => del('/notifications');
 export const submitFeedback = (sessionId: string, messageId: string, feedback: 'up' | 'down') => post(`/sessions/${sessionId}/feedback`, { message_id: messageId, feedback });
-export const configureTools = (tools: any) => post('/settings/tools', { tools });
+export const configureTools = (tools: unknown[]) => post('/settings/tools', { tools });
 export const fetchFeatureHealth = () => get('/health/features');
 export const fetchContractHealth = () => get('/health/contracts');
 export const fetchRouterMetrics = () => get('/router/metrics');
 export const resetRouterMetrics = () => post('/router/metrics/reset');
 export const fetchGitStatus = (path: string) => get(`/git/status?path=${encodeURIComponent(path)}`);
+export const fetchGitVisualizer = (path: string, limit = 120) =>
+  get(`/git/visualizer?path=${encodeURIComponent(path)}&limit=${limit}`);
 export const commitGit = (path: string, message: string, commit_all = true) => post('/git/commit', { path, message, commit_all });
 export const stageGitFile = (path: string, filePath: string) => post('/git/stage', { path, file_path: filePath });
 export const stageAllGit = (path: string) => post('/git/stage-all', { path });
@@ -183,7 +190,7 @@ export const checkoutGitRef = (path: string, ref: string) => post('/git/checkout
 export const pullGit = (path: string) => post('/git/pull', { path });
 export const pushGit = (path: string) => post('/git/push', { path });
 export const fetchPreferences = () => get('/settings/preferences');
-export const setPreference = (key: string, value: any) => post('/settings/preferences', { key, value });
+export const setPreference = (key: string, value: unknown) => post('/settings/preferences', { key, value });
 export const fetchToolsRegistry = () => get('/tools/registry');
 export const fetchQueue = () => get('/queue');
 export const enqueueTask = (task: string, mode: string, project_path?: string) =>
@@ -196,6 +203,34 @@ export const disableSkill = (skillName: string) => post(`/skills/${encodeURIComp
 export const runSkill = (skillName: string, body?: Record<string, unknown>) => post(`/skills/${encodeURIComponent(skillName)}/run`, body || {});
 export const fetchEnvironmentLatestPreview = () => get('/environments/latest/preview');
 export const fetchEnvironmentSessionPreview = (sessionId: string) => get(`/environments/${encodeURIComponent(sessionId)}/preview`);
+
+// Connectors
+export const fetchConnectorProviders = () => get('/connectors/providers');
+export const fetchConnectorOAuthServerSetup = () => get('/connectors/oauth/server-setup');
+export const updateConnectorOAuthServerSetup = (body: {
+  provider: string;
+  enabled?: boolean;
+  client_id?: string;
+  client_secret?: string;
+}) => post('/connectors/oauth/server-setup', body);
+export const fetchConnectors = () => get('/connectors');
+export const createConnector = (body: { type: string; name: string; mode?: string; config?: Record<string, unknown>; scopes?: string[] }) =>
+  post('/connectors', body);
+export const updateConnector = (id: string, body: { name?: string; mode?: string; config?: Record<string, unknown>; scopes?: string[] }) =>
+  requestWithFallback(`/connectors/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then((r) => r.json());
+export const deleteConnector = (id: string) => del(`/connectors/${encodeURIComponent(id)}`);
+export const connectConnector = (id: string) => post(`/connectors/${encodeURIComponent(id)}/connect`);
+export const startConnectorOAuth = (body: { connector_id: string; provider: string; return_url?: string }) =>
+  post('/connectors/oauth/start', body);
+export const disconnectConnector = (id: string) => post(`/connectors/${encodeURIComponent(id)}/disconnect`);
+export const testConnector = (id: string) => post(`/connectors/${encodeURIComponent(id)}/test`);
+export const syncConnector = (id: string) => post(`/connectors/${encodeURIComponent(id)}/sync`);
+export const listConnectorItems = (id: string) => get(`/connectors/${encodeURIComponent(id)}/items`);
+export const connectorRuns = (id: string) => get(`/connectors/${encodeURIComponent(id)}/runs`);
 
 export async function uploadFile(file: File) {
   const formData = new FormData();

@@ -16,6 +16,27 @@ class MCPConnector(ConnectorProvider):
     name = "MCP"
     supports_read = True
     supports_write = False
+    description = "Connect to an MCP server endpoint."
+
+    @property
+    def config_fields(self):
+        return [
+            {
+                "key": "endpoint",
+                "label": "MCP Endpoint URL",
+                "type": "text",
+                "required": True,
+                "placeholder": "http://localhost:9001",
+            },
+            {
+                "key": "api_key",
+                "label": "API Key (optional)",
+                "type": "password",
+                "required": False,
+                "secret": True,
+                "placeholder": "optional",
+            },
+        ]
 
     async def connect(self, ctx: ConnectorContext) -> ConnectorResult:
         endpoint = str(ctx.config.get("endpoint", "") or "").strip()
@@ -32,9 +53,13 @@ class MCPConnector(ConnectorProvider):
             return ConnectorResult(ok=False, status="invalid", error="Missing MCP endpoint")
 
         health_url = endpoint.rstrip("/") + "/health"
+        headers = {}
+        api_key = str(ctx.config.get("api_key", "") or "").strip()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         try:
             async with httpx.AsyncClient(timeout=6) as client:
-                resp = await client.get(health_url)
+                resp = await client.get(health_url, headers=headers)
             if resp.status_code not in (200, 204):
                 return ConnectorResult(ok=False, status="error", error=f"MCP health HTTP {resp.status_code}")
             return ConnectorResult(ok=True, status="ok", message="MCP endpoint reachable")

@@ -164,8 +164,9 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
     try {
       await writeFile(targetPath, code);
       toast.success('Code Applied', { description: `Written to ${targetPath}` });
-    } catch (e: any) {
-      toast.error('Apply failed', { description: e?.message || 'Unable to write file.' });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Unable to write file.';
+      toast.error('Apply failed', { description: message });
     }
   };
 
