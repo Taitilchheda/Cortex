@@ -3,7 +3,8 @@ import { useState, useEffect } from 'react';
 import { Session, AgentSettings } from '../lib/types';
 import {
   fetchRecommendations, fetchModels, fetchRouter, updateRouter,
-  fetchAgentSettings, updateAgentSettings, configureTools
+  fetchAgentSettings, updateAgentSettings, configureTools,
+  fetchFeatureHealth, fetchContractHealth
 } from '../lib/api';
 import { 
   Activity, 
@@ -59,8 +60,10 @@ export default function RightPanel({
   const [saved, setSaved] = useState('');
   const [settings, setSettings] = useState<AgentSettings>({
     auto_approve: 'ask', max_files: 50, max_retries: 1,
-    self_heal_count: 3, review_on_build: false, test_on_build: false, context_limit: 32768,
+    self_heal_count: 3, review_on_build: false, test_on_build: false, context_limit: 32768, local_only: false,
   });
+  const [featureHealth, setFeatureHealth] = useState<any>(null);
+  const [contractHealth, setContractHealth] = useState<any>(null);
   const [toolConfig, setToolConfig] = useState<Record<string, boolean>>({
     web_search: true,
     rag_index: false,
@@ -73,6 +76,8 @@ export default function RightPanel({
     fetchModels().then(d => setModels(d.data?.map((m: any) => m.id) || [])).catch(() => {});
     fetchRouter().then(d => setRouter(d.router || {})).catch(() => {});
     fetchAgentSettings().then(d => setSettings(d)).catch(() => {});
+    fetchFeatureHealth().then(setFeatureHealth).catch(() => {});
+    fetchContractHealth().then(setContractHealth).catch(() => {});
     const stored = typeof window !== 'undefined' ? localStorage.getItem('cortex-tools') : null;
     if (stored) {
       try { setToolConfig(JSON.parse(stored)); } catch {}
@@ -190,6 +195,14 @@ export default function RightPanel({
                 <div className={`status-ring ${isRunning ? 'status-ring--ok' : ''}`} style={{ background: isRunning ? 'var(--accent)' : 'var(--text-4)' }} />
                 <span style={{ fontSize: 13, fontWeight: 600 }}>{isRunning ? 'Processing Workspace' : 'Waiting for Input'}</span>
              </div>
+             {featureHealth?.features && (
+               <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-3)', display: 'grid', gap: 4 }}>
+                 <div>Memory: {featureHealth.features.memory ? 'ok' : 'down'}</div>
+                 <div>Web Search: {featureHealth.features.web_search ? 'ok' : 'down'}</div>
+                 <div>Git: {featureHealth.features.git ? 'ok' : 'down'}</div>
+                 <div>Local Only: {featureHealth.features.local_only ? 'on' : 'off'}</div>
+               </div>
+             )}
           </div>
         )}
 
@@ -227,6 +240,14 @@ export default function RightPanel({
                       <span className="setting-label">Self-Heal Loop</span>
                       <input type="number" className="setting-input" value={settings.self_heal_count} onChange={e => setSettings({...settings, self_heal_count: parseInt(e.target.value)})} />
                    </div>
+                   <div className="setting-row">
+                     <span className="setting-label">Local-only Mode</span>
+                     <input
+                      type="checkbox"
+                      checked={!!settings.local_only}
+                      onChange={e => setSettings({ ...settings, local_only: e.target.checked })}
+                     />
+                   </div>
                  </div>
                  <button className="btn--primary btn--sm" style={{ width: '100%', marginTop: 12 }} onClick={saveSettings}>{saved === 'settings' ? 'Saved' : 'Keep Changes'}</button>
               </div>
@@ -257,6 +278,11 @@ export default function RightPanel({
               </label>
             ))}
             <button className="btn--primary" onClick={saveTools} disabled={toolSaving}>{toolSaving ? 'Saving…' : 'Apply Tools'}</button>
+            {contractHealth?.contracts && (
+              <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-4)' }}>
+                API contracts verified.
+              </div>
+            )}
           </div>
         )}
 

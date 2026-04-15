@@ -112,12 +112,20 @@ export const fetchPinned = () => get('/sessions/pinned');
 export const searchSessions = (query: string) => get(`/sessions/search?q=${encodeURIComponent(query)}`);
 export const fetchFileTree = (path: string, depth = 3) => get(`/files/tree?path=${encodeURIComponent(path)}&depth=${depth}`);
 export const readFile = (path: string) => get(`/files/read?path=${encodeURIComponent(path)}`);
+export const writeFile = (path: string, content: string) => post('/files/write', { path, content });
+export const indexProject = (projectPath: string) => post('/project/index', { project_path: projectPath });
+export const searchProject = (projectPath: string, query: string, limit = 5) =>
+  post('/project/search', { project_path: projectPath, query, limit });
 export const fetchAgentSettings = () => get('/settings/agent');
 export const updateAgentSettings = (settings: any) => post('/settings/agent', settings);
 export const fetchNotifications = () => get('/notifications');
 export const clearNotifications = () => del('/notifications');
 export const submitFeedback = (sessionId: string, messageId: string, feedback: 'up' | 'down') => post(`/sessions/${sessionId}/feedback`, { message_id: messageId, feedback });
 export const configureTools = (tools: any) => post('/settings/tools', { tools });
+export const fetchFeatureHealth = () => get('/health/features');
+export const fetchContractHealth = () => get('/health/contracts');
+export const fetchGitStatus = (path: string) => get(`/git/status?path=${encodeURIComponent(path)}`);
+export const commitGit = (path: string, message: string) => post('/git/commit', { path, message });
 
 export async function uploadFile(file: File) {
   const formData = new FormData();

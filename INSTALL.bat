@@ -5,16 +5,22 @@ echo ║  Cortex — First-Time Installation   ║
 echo ╚══════════════════════════════════════════════╝
 echo.
 
+set "PY_CMD=python"
+%PY_CMD% --version >nul 2>&1
+if errorlevel 1 (
+    set "PY_CMD=py -3"
+)
+
 REM Check Python
 echo [1/4] Checking Python...
-python --version >nul 2>&1
+%PY_CMD% --version >nul 2>&1
 if errorlevel 1 (
     echo ERROR: Python not found. Install Python 3.10+ from python.org
     echo Make sure to check "Add to PATH" during installation.
     pause
     exit /b 1
 )
-python --version
+%PY_CMD% --version
 echo ✓ Python found
 
 REM Check Node
@@ -33,7 +39,7 @@ REM Install Python deps
 echo.
 echo [3/4] Installing Python dependencies...
 cd /d "%~dp0server"
-pip install -r requirements.txt
+%PY_CMD% -m pip install -r requirements.txt
 if errorlevel 1 (
     echo WARNING: Some pip packages may have had issues.
     echo Continuing anyway...

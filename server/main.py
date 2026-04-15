@@ -11,6 +11,9 @@ import pathlib
 import base64
 import mimetypes
 import asyncio
+import subprocess
+import shutil
+import sqlite3
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, UploadFile, File, Request, HTTPException, BackgroundTasks, WebSocket, Form
@@ -20,8 +23,10 @@ from pydantic import BaseModel, Field
 from api.state import (
     init_db, create_session, get_session, list_sessions, 
     delete_session, clear_all_sessions, add_event, update_session_title, search_sessions,
-    index_project_file, search_project_context, clear_project_index
+    index_project_file, search_project_context, clear_project_index,
+    set_session_pinned, list_pinned_sessions
 )
+from api.memory import init_memory_db
 from config.models import (
     MODEL_ROUTER, get_model_for_role, update_router, 
     check_ollama_health, fetch_ollama_models, recommend_models,
@@ -36,6 +41,7 @@ from agents.orchestrator import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    await init_memory_db()
     yield
 
 app = FastAPI(
@@ -96,6 +102,7 @@ class AgentSettingsRequest(BaseModel):
     review_on_build: bool = False
     test_on_build: bool = False
     context_limit: int = 32768
+    local_only: bool = False
 
 class FeedbackRequest(BaseModel):
     message_id: str
@@ -115,6 +122,14 @@ class ProjectSearchRequest(BaseModel):
 class ConfigToolsRequest(BaseModel):
     tools: List[Dict[str, Any]] = Field(..., description="List of tool configurations")
 
+class FileWriteRequest(BaseModel):
+    path: str
+    content: str
+
+class GitCommitRequest(BaseModel):
+    path: str
+    message: str
+
 # ─── In-Memory Stores ────────────────────────────────────────────
 _agent_settings = {
     "auto_approve": "ask",
@@ -124,9 +139,9 @@ _agent_settings = {
     "review_on_build": False,
     "test_on_build": False,
     "context_limit": 32768,
+    "local_only": False,
 }
 _notifications: list = []
-_pinned_sessions: set = set()
 
 # ─── SSE Helper ──────────────────────────────────────────────────
 def sse_format(event_type: str, data: dict) -> str:
@@ -171,6 +186,43 @@ async def health():
         "model_count": len(models),
         "active_sessions": len(sessions),
         "router": MODEL_ROUTER,
+    }
+
+@app.get("/health/contracts")
+async def health_contracts():
+    """Contract-level capability check used by frontend diagnostics."""
+    return {
+        "status": "ok",
+        "contracts": {
+            "files_tree_shape": {"path": "string", "tree": "array", "files": "array"},
+            "sessions_shape": {"sessions": "array"},
+            "pinned_shape": {"pinned": "array"},
+            "notifications_shape": {"notifications": "array"},
+        },
+    }
+
+@app.get("/health/features")
+async def health_features():
+    """Runtime feature readiness checks."""
+    memory_ok = False
+    try:
+        conn = sqlite3.connect(os.path.join(os.path.dirname(__file__), "mission_control.db"))
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='memory'")
+        memory_ok = cur.fetchone() is not None
+        conn.close()
+    except Exception:
+        memory_ok = False
+
+    return {
+        "status": "ok",
+        "features": {
+            "memory": memory_ok,
+            "web_search": True,
+            "git": shutil.which("git") is not None,
+            "local_only": _agent_settings.get("local_only", False),
+            "ollama_connected": (await check_ollama_health()).get("status") == "connected",
+        },
     }
 
 @app.get("/status")
@@ -228,7 +280,13 @@ async def agent_chat(req: ChatRequest):
 
     async def event_stream():
         yield sse_format("session", {"session_id": session_id})
-        async for event in run_chat(req.task, req.mode, session_id, req.attachments):
+        async for event in run_chat(
+            req.task,
+            req.mode,
+            session_id,
+            req.attachments,
+            _agent_settings.get("local_only", False),
+        ):
             yield sse_format(event["type"], event["data"])
 
     return StreamingResponse(
@@ -355,7 +413,7 @@ async def list_sess():
 @app.get("/sessions/pinned")
 async def get_pinned():
     """Get list of pinned session IDs."""
-    return {"pinned": list(_pinned_sessions)}
+    return {"pinned": await list_pinned_sessions()}
 
 @app.post("/project/index")
 async def project_index_endpoint(req: IndexRequest, background_tasks: BackgroundTasks):
@@ -441,10 +499,9 @@ async def clear_sessions():
 @app.post("/sessions/{session_id}/pin")
 async def pin_session(session_id: str, req: PinRequest):
     """Pin or unpin a session."""
-    if req.pinned:
-        _pinned_sessions.add(session_id)
-    else:
-        _pinned_sessions.discard(session_id)
+    updated = await set_session_pinned(session_id, req.pinned)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Session not found")
     return {"session_id": session_id, "pinned": req.pinned}
 
 # ─── File Explorer ───────────────────────────────────────────────
@@ -484,7 +541,8 @@ async def file_tree(path: str, depth: int = 3):
         return items
 
     tree = scan_dir(path, 1)
-    return {"path": path, "tree": tree}
+    # Include both keys for backward compatibility.
+    return {"path": path, "tree": tree, "files": tree}
 
 @app.get("/files/read")
 async def read_file(path: str):
@@ -497,6 +555,22 @@ async def read_file(path: str):
         return {"path": path, "content": content, "size": os.path.getsize(path)}
     except UnicodeDecodeError:
         return {"path": path, "content": "[Binary file]", "size": os.path.getsize(path), "binary": True}
+
+@app.post("/files/write")
+async def write_file(req: FileWriteRequest):
+    """Write file content to disk with basic path-safety checks."""
+    if not req.path:
+        raise HTTPException(status_code=400, detail="Path is required")
+    safe_path = os.path.abspath(req.path)
+    # Disallow writing directly into Python/site-packages or Windows directories.
+    lowered = safe_path.lower()
+    if "site-packages" in lowered or lowered.startswith("c:\\windows"):
+        raise HTTPException(status_code=400, detail="Unsafe write path")
+
+    os.makedirs(os.path.dirname(safe_path), exist_ok=True)
+    with open(safe_path, "w", encoding="utf-8") as f:
+        f.write(req.content)
+    return {"path": safe_path, "written": True, "size": os.path.getsize(safe_path)}
 
 # ─── Agent Settings ──────────────────────────────────────────────
 @app.get("/settings/agent")
@@ -514,8 +588,99 @@ async def update_agent_settings(req: AgentSettingsRequest):
 @app.post("/settings/tools")
 async def update_tool_config(req: ToolConfigRequest):
     """Configure which tools the agent can access"""
-    # Just a stub for now, would save to DB/disk in v5
+    _agent_settings["enabled_tools"] = req.tools
     return {"status": "success", "tools_configured": len(req.tools)}
+
+@app.get("/git/status")
+async def git_status(path: str):
+    """Return git status details for the given repository path."""
+    repo_path = os.path.abspath(path)
+    if not os.path.isdir(repo_path):
+        raise HTTPException(status_code=404, detail="Path not found")
+    if not os.path.isdir(os.path.join(repo_path, ".git")):
+        raise HTTPException(status_code=400, detail="Not a git repository")
+
+    branch = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    ).stdout.strip()
+
+    raw = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    ).stdout.splitlines()
+
+    staged = []
+    modified = []
+    for line in raw:
+        if len(line) < 4:
+            continue
+        x = line[0]
+        y = line[1]
+        p = line[3:]
+        if x != " ":
+            staged.append(p)
+        if y != " ":
+            modified.append(p)
+
+    commits_raw = subprocess.run(
+        ["git", "log", "--oneline", "-n", "5"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    ).stdout.splitlines()
+    recent_commits = []
+    for c in commits_raw:
+        if not c.strip():
+            continue
+        parts = c.split(" ", 1)
+        if len(parts) == 2:
+            recent_commits.append({"hash": parts[0], "msg": parts[1], "date": "recent"})
+
+    return {
+        "branch": branch,
+        "modified": modified,
+        "staged": staged,
+        "recent_commits": recent_commits,
+    }
+
+@app.post("/git/commit")
+async def git_commit(req: GitCommitRequest):
+    """Commit currently staged changes."""
+    repo_path = os.path.abspath(req.path)
+    if not os.path.isdir(os.path.join(repo_path, ".git")):
+        raise HTTPException(status_code=400, detail="Not a git repository")
+    if not req.message.strip():
+        raise HTTPException(status_code=400, detail="Commit message is required")
+
+    add_proc = subprocess.run(
+        ["git", "add", "."],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    if add_proc.returncode != 0:
+        raise HTTPException(status_code=500, detail=add_proc.stderr or "git add failed")
+
+    commit_proc = subprocess.run(
+        ["git", "commit", "-m", req.message],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    if commit_proc.returncode != 0:
+        raise HTTPException(status_code=400, detail=commit_proc.stderr or commit_proc.stdout or "git commit failed")
+
+    return {"status": "committed", "message": req.message}
 
 @app.post("/sessions/{session_id}/feedback")
 async def submit_feedback(session_id: str, req: FeedbackRequest):

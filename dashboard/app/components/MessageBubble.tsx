@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { ChatMessage } from '../lib/types';
 import { extractCodeBlocks } from '../lib/utils';
-import { submitFeedback } from '../lib/api';
+import { submitFeedback, writeFile } from '../lib/api';
 import { toast } from 'sonner';
 import { 
   ThumbsUp, 
@@ -142,8 +142,15 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
     setTimeout(() => setCopied(false), 2000);
   };
   
-  const apply = () => {
-    toast.success('Code Applied', { description: 'Modifications integrated into local workspace.' });
+  const apply = async () => {
+    const targetPath = window.prompt('Apply code to file path:');
+    if (!targetPath) return;
+    try {
+      await writeFile(targetPath, code);
+      toast.success('Code Applied', { description: `Written to ${targetPath}` });
+    } catch (e: any) {
+      toast.error('Apply failed', { description: e?.message || 'Unable to write file.' });
+    }
   };
 
   return (

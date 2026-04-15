@@ -5,9 +5,15 @@ echo ║  Cortex — Development Mode           ║
 echo ╚══════════════════════════════════════════════╝
 echo.
 
+set "PY_CMD=python"
+%PY_CMD% --version >nul 2>&1
+if errorlevel 1 (
+	set "PY_CMD=py -3"
+)
+
 REM Start FastAPI server with hot reload
 echo Starting agent server on :8000 (hot reload)...
-start "MC-Server-Dev" cmd /c "cd /d "%~dp0server" && python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+start "MC-Server-Dev" cmd /c "cd /d "%~dp0server" && %PY_CMD% -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
 
 REM Start Next.js dev server
 echo Starting dashboard on :3001 (hot reload)...

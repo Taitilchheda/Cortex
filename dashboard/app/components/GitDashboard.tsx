@@ -1,7 +1,8 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { GitBranch, GitCommit, GitPullRequest, RotateCcw, Check, Plus, Minus } from 'lucide-react';
+import { GitBranch, GitCommit, RotateCcw, Check, Plus, Minus } from 'lucide-react';
 import { toast } from 'sonner';
+import { fetchGitStatus, commitGit } from '../lib/api';
 
 interface GitStatus {
   branch: string;
@@ -13,26 +14,43 @@ interface GitStatus {
 export default function GitDashboard() {
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [loading, setLoading] = useState(false);
+   const [repoPath, setRepoPath] = useState('');
+
+   useEffect(() => {
+      if (typeof window !== 'undefined') {
+         const p = localStorage.getItem('cortex-last-path') || 'F:/Cortex';
+         setRepoPath(p);
+      }
+   }, []);
 
   const fetchStatus = async () => {
     setLoading(true);
     try {
-      // Mock for now, but in a real app this would call /git/status
-      const mock: GitStatus = {
-        branch: 'main',
-        modified: ['server/orchestrator.py', 'dashboard/page.tsx'],
-        staged: ['server/api/memory.py'],
-        recent_commits: [
-          { hash: 'a1b2c3d', msg: 'Integrated long-term memory system', date: '2m ago' },
-          { hash: 'e4f5g6h', msg: 'Added multi-file editor tabs', date: '15m ago' },
-        ],
-      };
-      setStatus(mock);
-    } catch { toast.error('Failed to sync Git status'); }
+         if (!repoPath) return;
+         const data = await fetchGitStatus(repoPath);
+         setStatus(data);
+      } catch {
+         toast.error('Failed to sync Git status');
+      }
     setLoading(false);
   };
 
-  useEffect(() => { fetchStatus(); }, []);
+   useEffect(() => {
+      if (repoPath) fetchStatus();
+   }, [repoPath]);
+
+   const handleCommit = async () => {
+      if (!repoPath) return;
+      const msg = window.prompt('Commit message:');
+      if (!msg) return;
+      try {
+         await commitGit(repoPath, msg);
+         toast.success('Committed successfully');
+         fetchStatus();
+      } catch (e: any) {
+         toast.error('Commit failed', { description: e?.message || 'Unable to commit changes' });
+      }
+   };
 
   return (
     <div className="git-sidebar">
@@ -83,8 +101,8 @@ export default function GitDashboard() {
       </div>
 
       <div style={{ padding: 14 }}>
-         <button className="btn btn--primary" style={{ width: '100%', borderRadius: 6 }} onClick={() => toast.info('Commit functionality coming soon')}>
-            <Check size={14} /> Commit All (WIP)
+         <button className="btn btn--primary" style={{ width: '100%', borderRadius: 6 }} onClick={handleCommit}>
+            <Check size={14} /> Commit All
          </button>
       </div>
     </div>

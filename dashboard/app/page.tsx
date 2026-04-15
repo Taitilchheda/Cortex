@@ -24,7 +24,8 @@ import {
   fetchPinned,
   fetchFileTree, 
   readFile, 
-  fetchAgentSettings
+  fetchAgentSettings,
+  indexProject
 } from './lib/api';
 import { uid } from './lib/utils';
 import {
@@ -116,11 +117,7 @@ export default function Cortex() {
     if (lastBuildPath && lastBuildPath.length > 3) {
       const timer = setTimeout(async () => {
         try {
-          await fetch('/project/index', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ project_path: lastBuildPath })
-          });
+          await indexProject(lastBuildPath);
         } catch {}
       }, 1000);
       return () => clearTimeout(timer);
@@ -191,13 +188,16 @@ export default function Cortex() {
       } else {
         // Rebuild chat messages from events
         const msgs: ChatMessage[] = [];
-        // Add user's original message
-        if (full.title) {
-          msgs.push({
-            id: uid(), role: 'user', content: full.title, timestamp: full.created_at,
-          });
-        }
+        // Replay full chat flow from events.
         for (const ev of full.events || []) {
+          if (ev.type === 'chat_start' && ev.data?.task) {
+            msgs.push({
+              id: uid(),
+              role: 'user',
+              content: ev.data.task,
+              timestamp: ev.timestamp || Date.now() / 1000,
+            });
+          }
           if (ev.type === 'chat_response') {
             msgs.push({
               id: uid(), role: 'assistant', content: ev.data?.content || '',
@@ -473,6 +473,9 @@ export default function Cortex() {
       setBuildStartTime(Date.now() / 1000);
       setLastBuildPath(projectPath);
       setLastBuildTask(text);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('cortex-last-path', projectPath);
+      }
       setIsStreaming(true);
       setBuildComplete(false);
 
@@ -523,6 +526,10 @@ export default function Cortex() {
       setBuildEvents([]);
       setArchitectText('');
       setBuildStartTime(Date.now() / 1000);
+      setLastBuildPath(projectPath);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('cortex-last-path', projectPath);
+      }
       setIsStreaming(true);
 
       abortRef.current = new AbortController();
@@ -669,7 +676,7 @@ export default function Cortex() {
               />
             ) : messages.length > 0 ? (
               <div className="chat-scroll" id="chat-container">
-                {messages.map(msg => <MessageBubble key={msg.id} message={msg} />)}
+                {messages.map(msg => <MessageBubble key={msg.id} message={msg} sessionId={activeSessionId} />)}
                 <div ref={chatEndRef} />
               </div>
             ) : (
@@ -728,6 +735,7 @@ export default function Cortex() {
             totalFiles={totalFiles}
             contextTokens={contextTokens}
             contextLimit={contextLimit}
+            activeFile={activeFile}
           />
         </div>
       </div>

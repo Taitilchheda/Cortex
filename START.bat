@@ -5,9 +5,15 @@ echo ║  Cortex — Production Mode            ║
 echo ╚══════════════════════════════════════════════╝
 echo.
 
+set "PY_CMD=python"
+%PY_CMD% --version >nul 2>&1
+if errorlevel 1 (
+	set "PY_CMD=py -3"
+)
+
 REM Start FastAPI server
 echo Starting agent server on :8000...
-start "Cortex Server" cmd /c "cd /d "%~dp0server" && python -m uvicorn main:app --host 0.0.0.0 --port 8000"
+start "Cortex Server" cmd /c "cd /d "%~dp0server" && %PY_CMD% -m uvicorn main:app --host 0.0.0.0 --port 8000"
 
 REM Start Next.js
 echo Starting dashboard on :3001...

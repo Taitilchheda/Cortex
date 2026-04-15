@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Notification, Session } from '../lib/types';
 import { fetchNotifications, clearNotifications } from '../lib/api';
+import { useTheme } from 'next-themes';
 import { 
   Bell, 
   Search, 
@@ -32,6 +33,7 @@ export default function AppBar({
   ollamaOk, modelCount, sessionCount, onGlobalSearch, sessions = [], 
   activeSession, activeFile 
 }: AppBarProps) {
+  const { theme, setTheme } = useTheme();
   const [time, setTime] = useState('');
   const [searchVal, setSearchVal] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
@@ -146,9 +148,7 @@ export default function AppBar({
         <button
           className="icon-btn"
           onClick={() => {
-            const html = document.documentElement;
-            const current = html.getAttribute('data-theme');
-            html.setAttribute('data-theme', current === 'light' ? 'dark' : 'light');
+            setTheme(theme === 'light' ? 'dark' : 'light');
           }}
           aria-label="Toggle theme"
         >

@@ -11,6 +11,7 @@ import os
 import json
 import httpx
 import asyncio
+import subprocess
 from typing import AsyncGenerator, Dict, Any, Optional
 from config.models import get_model_for_role, OLLAMA_BASE
 
@@ -312,4 +313,4 @@ async def _run_project_tests(project_path: str) -> dict:
         except Exception as e:
             return {"success": False, "output": f"Runner Error: {str(e)}"}
 
-    return {"success": True, "output": "Verfied"}
+    return {"success": True, "output": "Verified"}

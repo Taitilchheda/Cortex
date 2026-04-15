@@ -35,8 +35,10 @@ export default function AgentOutput({
   const errorEvents = events.filter(e => e.type === 'error');
   const aiderEvents = events.filter(e => e.type === 'aider_output');
   const healEvents = logEvents.filter(e => e.phase?.startsWith('self_heal'));
-  const isDone = logEvents.some(e => e.phase === 'complete');
+  const reviewEvents = logEvents.filter(e => e.phase?.startsWith('review_'));
+  const isDone = logEvents.some(e => e.phase === 'complete' || e.phase === 'build_done');
   const isCoding = logEvents.some(e => e.phase === 'coding');
+  const isReviewing = reviewEvents.some(e => e.phase === 'review_start') && !isDone;
 
   const terminalLogs = useMemo(() => {
     return events
@@ -90,12 +92,12 @@ export default function AgentOutput({
           ].map((phase, i) => {
             const isActive =
               (i === 0 && architectText && !isCoding) ||
-              (i === 1 && isCoding && !isDone) ||
-              (i === 2 && healEvents.length > 0 && !isDone) ||
+              (i === 1 && isCoding && !isDone && !isReviewing) ||
+              (i === 2 && isReviewing) ||
               (i === 3 && isDone);
             const isPast =
               (i === 0 && (isCoding || isDone)) ||
-              (i === 1 && isDone) ||
+              (i === 1 && (isReviewing || isDone)) ||
               (i === 2 && isDone);
 
             return (

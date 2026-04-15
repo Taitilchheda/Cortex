@@ -107,13 +107,21 @@ async def run_build(task: str, project_path: str, session_id: str, self_heal: bo
                 await add_event(session_id, event["type"], event["data"])
                 yield event
 
+            await add_event(session_id, "log", {"phase": "complete", "message": "Build and review complete."})
+            yield {"type": "log", "data": {"phase": "complete", "message": "Build and review complete."}}
             await add_event(session_id, "log", {"phase": "build_done", "message": "Build and review complete."})
             
             # Git auto-commit
             await _git_auto_commit(project_path, task)
 
 
-async def run_chat(task: str, mode: str, session_id: str, attachments: list = None) -> AsyncGenerator[Dict[str, Any], None]:
+async def run_chat(
+    task: str,
+    mode: str,
+    session_id: str,
+    attachments: list = None,
+    local_only: bool = False,
+) -> AsyncGenerator[Dict[str, Any], None]:
     """Chat with role routing + image support + multi-turn memory."""
     model = get_model_for_role(mode)
     
@@ -135,7 +143,7 @@ async def run_chat(task: str, mode: str, session_id: str, attachments: list = No
                 user_content += f"\n\n--- Attached: {att.get('name', 'file')} ---\n{att['content']}"
 
     # Process Search Intent (Web Search)
-    if any(kw in task.lower() for kw in ["search", "google", "web", "latest", "how to", "library"]):
+    if (not local_only) and any(kw in task.lower() for kw in ["search", "google", "web", "latest", "how to", "library"]):
         yield {"type": "log", "data": {"phase": "web_search", "message": f"🌐 Proactively searching web for: {task}..."}}
         web_context = await get_web_context(task)
         if web_context:
@@ -154,7 +162,7 @@ async def run_chat(task: str, mode: str, session_id: str, attachments: list = No
     messages.append({"role": "user", "content": user_content})
     
     add_to_conversation(session_id, "user", user_content)
-    await add_event(session_id, "chat_start", {"mode": mode, "model": model})
+    await add_event(session_id, "chat_start", {"mode": mode, "model": model, "task": task})
 
     full_response = ""
     try:

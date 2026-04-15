@@ -59,6 +59,11 @@ export default function CommandPalette({ sessions, onSelectSession, onNewSession
                 <Command.Item onSelect={() => runCommand(onClearAll)}>
                   🗑 Clear All Sessions
                 </Command.Item>
+                {search.trim().length > 0 && (
+                  <Command.Item onSelect={() => runCommand(() => onGlobalSearch(search.trim()))}>
+                    🔍 Search for "{search.trim()}"
+                  </Command.Item>
+                )}
               </Command.Group>
 
               {sessions.length > 0 && (

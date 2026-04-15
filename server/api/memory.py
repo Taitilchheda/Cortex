@@ -1,10 +1,9 @@
 import aiosqlite
 import os
-import json
-from typing import List, Dict, Any, Optional
-from datetime import datetime
+from typing import List, Dict, Any
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "cortex.db")
+# Keep memory in the same SQLite file used by session state.
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "mission_control.db")
 
 async def init_memory_db():
     async with aiosqlite.connect(DB_PATH) as db:
@@ -35,31 +34,38 @@ async def add_memory(key: str, value: str, source: str = "user"):
         await db.commit()
 
 async def get_memories(limit: int = 5) -> List[Dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM memory ORDER BY updated_at DESC LIMIT ?", (limit,)) as cursor:
-            rows = await cursor.fetchall()
-            return [dict(r) for r in rows]
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM memory ORDER BY updated_at DESC LIMIT ?", (limit,)) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(r) for r in rows]
+    except Exception:
+        return []
 
 async def search_memories(query: str, limit: int = 5) -> List[Dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("""
-            SELECT m.* FROM memory m 
-            JOIN memory_fts f ON m.id = f.rowid 
-            WHERE memory_fts MATCH ? 
-            ORDER BY rank LIMIT ?
-        """, (query, limit)) as cursor:
-            rows = await cursor.fetchall()
-            return [dict(r) for r in rows]
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("""
+                SELECT m.* FROM memory m 
+                JOIN memory_fts f ON m.id = f.rowid 
+                WHERE memory_fts MATCH ? 
+                ORDER BY rank LIMIT ?
+            """, (query, limit)) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(r) for r in rows]
+    except Exception:
+        return []
 
 async def get_memory_context(task: str) -> str:
     """
     Search memories relevant to the task and format for prompt injection.
     """
     # Simple keyword extraction for now
-    mems = await get_memories(10) # Fallback to recent
-    if not mems: return ""
+    mems = await get_memories(10)
+    if not mems:
+        return ""
     
     ctx = "\n--- Long-Term Memory (Learned Context) ---\n"
     for m in mems:

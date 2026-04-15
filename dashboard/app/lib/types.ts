@@ -65,6 +65,7 @@ export interface AgentSettings {
   review_on_build: boolean;
   test_on_build: boolean;
   context_limit: number;
+  local_only?: boolean;
 }
 
 export interface Notification {

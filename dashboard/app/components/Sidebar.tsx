@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Session, FileNode } from '../lib/types';
-import { fetchFileTree, readFile, fetchModels, fetchRouter, searchSessions } from '../lib/api';
+import { fetchFileTree, readFile, searchSessions } from '../lib/api';
 import { formatBytes, formatTimestamp, truncate } from '../lib/utils';
 import { 
   History, 
@@ -45,6 +45,7 @@ export default function Sidebar({
   onClearAll, onTogglePin, onFileSelect, searchQuery, activeTab = 'sessions'
 }: LeftPanelProps) {
   const [searchLocal, setSearchLocal] = useState('');
+  const [remoteSearchSessions, setRemoteSearchSessions] = useState<Session[] | null>(null);
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [router, setRouter] = useState<Record<string, string>>({});
@@ -52,13 +53,41 @@ export default function Sidebar({
 
   const isSearching = !!searchQuery || !!searchLocal;
   const filteredSessions = useMemo(() => {
+    if (remoteSearchSessions) return remoteSearchSessions;
     const q = (searchQuery || searchLocal).toLowerCase();
     if (!q) return sessions;
     return sessions.filter(s => 
       s.title?.toLowerCase().includes(q) || 
       s.type?.toLowerCase().includes(q)
     );
-  }, [sessions, searchQuery, searchLocal]);
+  }, [sessions, searchQuery, searchLocal, remoteSearchSessions]);
+
+  useEffect(() => {
+    const q = (searchQuery || searchLocal).trim();
+    if (!q) {
+      setRemoteSearchSessions(null);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const data = await searchSessions(q);
+        if (!cancelled) {
+          setRemoteSearchSessions(data.sessions || []);
+        }
+      } catch {
+        if (!cancelled) {
+          setRemoteSearchSessions(null);
+        }
+      }
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [searchQuery, searchLocal]);
 
   const grouped = useMemo(() => groupSessions(filteredSessions, pinnedIds, isSearching), [filteredSessions, pinnedIds, isSearching]);
 
@@ -72,7 +101,7 @@ export default function Sidebar({
   const loadTree = async (path: string) => {
     try {
       const resp = await fetchFileTree(path);
-      setFileTree(resp.files || []);
+      setFileTree(resp.tree || resp.files || []);
     } catch {
       setFileTree([]);
     }
