@@ -112,7 +112,7 @@ Run both servers simultaneously:
 - **Frontend**: [http://localhost:3001](http://localhost:3001)
 - **Backend API**: [http://localhost:8000](http://localhost:8000)
 
-For detailed Windows startup and troubleshooting, see [docs/HOW_TO_RUN.md](./docs/HOW_TO_RUN.md).
+For detailed Windows, macOS, and Ubuntu startup/troubleshooting, see [docs/HOW_TO_RUN.md](./docs/HOW_TO_RUN.md).
 
 ---
 

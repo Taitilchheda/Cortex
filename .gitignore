@@ -6,6 +6,9 @@ dashboard/build/
 dashboard/*.log
 
 # Python
+**/__pycache__/
+*.py[cod]
+*$py.class
 server/__pycache__/
 server/*.py[cod]
 server/*$py.class

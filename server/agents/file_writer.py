@@ -235,6 +235,31 @@ async def _generate_file_content(model: str, prompt: str, file_path: str) -> Opt
     return None
 
 
+def write_file_content(project_path: str, rel_path: str, content: str) -> Dict[str, Any]:
+    """Write generated content to disk and return write metadata."""
+    full_path = os.path.join(project_path, rel_path)
+    old_content = None
+    if os.path.exists(full_path):
+        try:
+            with open(full_path, "r", encoding="utf-8") as src:
+                old_content = src.read()
+        except Exception:
+            old_content = None
+
+    os.makedirs(os.path.dirname(full_path), exist_ok=True)
+    with open(full_path, "w", encoding="utf-8") as dst:
+        dst.write(content)
+
+    size = os.path.getsize(full_path)
+    return {
+        "path": full_path,
+        "rel_path": rel_path,
+        "size": size,
+        "old_content": old_content,
+        "new_content": content,
+    }
+
+
 async def self_healing_build(task: str, project_path: str, max_attempts: int = 3) -> AsyncGenerator[Dict[str, Any], None]:
     """
     Self-healing build loop.

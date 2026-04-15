@@ -76,6 +76,22 @@ export default function MessageBubble({ message, sessionId }: { message: ChatMes
       </div>
 
       <div className="msg__body">
+        {!isUser && message.routerDecision && (
+          <div className="msg__router">
+            <span className="msg__router-title">Why this role:</span>
+            {message.routerDecision.reason ? (
+              <span>{message.routerDecision.reason}</span>
+            ) : (
+              <span>Selected by router policy.</span>
+            )}
+            {typeof message.routerDecision.confidence === 'number' && (
+              <span className="msg__router-meta">Confidence {Math.round(message.routerDecision.confidence * 100)}%</span>
+            )}
+            {Array.isArray(message.routerDecision.matched_keywords) && message.routerDecision.matched_keywords.length > 0 && (
+              <span className="msg__router-meta">Keywords: {message.routerDecision.matched_keywords.slice(0, 4).join(', ')}</span>
+            )}
+          </div>
+        )}
         <FormattedContent content={message.content} />
       </div>
 

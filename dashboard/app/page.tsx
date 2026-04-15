@@ -40,8 +40,84 @@ import {
   Plus,
   GitBranch
 } from 'lucide-react';
-import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from 'react-resizable-panels';
+import {
+  Panel,
+  Group as PanelGroup,
+  Separator as PanelResizeHandle,
+  type GroupImperativeHandle,
+  type Layout,
+} from 'react-resizable-panels';
 import { toast } from 'sonner';
+
+type DesktopLayoutVariant = 'with-left' | 'without-left';
+
+const PANEL_LAYOUT_STORAGE_PREFIX = 'cortex-desktop-layout-v1';
+const DEFAULT_DESKTOP_LAYOUTS: Record<DesktopLayoutVariant, Layout> = {
+  'with-left': {
+    'left-panel': 22,
+    'workspace-panel': 53,
+    'right-panel': 25,
+  },
+  'without-left': {
+    'workspace-panel': 74,
+    'right-panel': 26,
+  },
+};
+
+const getLayoutStorageKey = (variant: DesktopLayoutVariant) => `${PANEL_LAYOUT_STORAGE_PREFIX}:${variant}`;
+
+const parseStoredLayout = (value: string | null): unknown => {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+};
+
+const sanitizeLayout = (layout: unknown, fallback: Layout): Layout => {
+  if (!layout || typeof layout !== 'object') return fallback;
+  const source = layout as Record<string, unknown>;
+  const normalized: Layout = {};
+  let total = 0;
+
+  for (const panelId of Object.keys(fallback)) {
+    const value = source[panelId];
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+      return fallback;
+    }
+    normalized[panelId] = value;
+    total += value;
+  }
+
+  if (Math.abs(total - 100) > 0.5) return fallback;
+  return normalized;
+};
+
+const readStoredLayouts = (): Record<DesktopLayoutVariant, Layout> => {
+  if (typeof window === 'undefined') {
+    return {
+      'with-left': DEFAULT_DESKTOP_LAYOUTS['with-left'],
+      'without-left': DEFAULT_DESKTOP_LAYOUTS['without-left'],
+    };
+  }
+
+  return {
+    'with-left': sanitizeLayout(
+      parseStoredLayout(localStorage.getItem(getLayoutStorageKey('with-left'))),
+      DEFAULT_DESKTOP_LAYOUTS['with-left']
+    ),
+    'without-left': sanitizeLayout(
+      parseStoredLayout(localStorage.getItem(getLayoutStorageKey('without-left'))),
+      DEFAULT_DESKTOP_LAYOUTS['without-left']
+    ),
+  };
+};
+
+const getDefaultDesktopLayouts = (): Record<DesktopLayoutVariant, Layout> => ({
+  'with-left': { ...DEFAULT_DESKTOP_LAYOUTS['with-left'] },
+  'without-left': { ...DEFAULT_DESKTOP_LAYOUTS['without-left'] },
+});
 
 export default function Cortex() {
   // ─── Core State ───────────────────────────────────────────────
@@ -79,11 +155,13 @@ export default function Cortex() {
   const [isMobile, setIsMobile] = useState(false);
   const [mobileSection, setMobileSection] = useState<'nav' | 'workspace' | 'insight'>('workspace');
   const [activeTab, setActiveTab] = useState<'sessions' | 'files' | 'agent' | 'git'>('sessions');
-  const [sidebarWidth, setSidebarWidth] = useState(280);
   const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [lastKnownPath, setLastKnownPath] = useState('');
+  const [desktopLayouts, setDesktopLayouts] = useState<Record<DesktopLayoutVariant, Layout>>(getDefaultDesktopLayouts);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const panelGroupRef = useRef<GroupImperativeHandle | null>(null);
 
   // ─── Health Check (15s interval) ──────────────────────────────
   useEffect(() => {
@@ -107,9 +185,18 @@ export default function Cortex() {
         const setts = await fetchAgentSettings();
         setSelfHealEnabled(setts.test_on_build || false);
       } catch {}
+      if (typeof window !== 'undefined') {
+        const rememberedPath = localStorage.getItem('cortex-last-path') || '';
+        if (rememberedPath) setLastKnownPath(rememberedPath);
+      }
     };
     init();
     fetchPinned().then(d => setPinnedIds(new Set(d.pinned || []))).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    setDesktopLayouts(readStoredLayouts());
   }, []);
 
   // Auto-index project when path changes
@@ -286,18 +373,34 @@ export default function Cortex() {
   };
 
   // ─── Global Search ────────────────────────────────────────────
-  const handleGlobalSearch = (query: string) => {
-    setSearchQuery(query);
-  };
+  const handleGlobalSearch = useCallback((query: string) => {
+    const nextQuery = (query || '').trim();
+    setSearchQuery(nextQuery);
+
+    // If user is in a non-search panel, switch to sessions to show immediate results.
+    if (nextQuery && activeTab === 'agent') {
+      setActiveTab('sessions');
+      if (!isMobile) {
+        setSidebarVisible(true);
+      } else {
+        setMobileSection('nav');
+      }
+    }
+  }, [activeTab, isMobile]);
 
   // ─── Mode Card Click ─────────────────────────────────────────
   const handleModeCardClick = (mode: AgentMode) => {
     setDefaultMode(mode);
-    // Focus the input bar
-    setTimeout(() => {
-      const input = document.getElementById('main-input') as HTMLTextAreaElement;
-      input?.focus();
-    }, 100);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('cortex:prefill', { detail: { mode } }));
+    }
+  };
+
+  const handleQuickStart = (payload: { text: string; mode: AgentMode; role?: ChatRole; projectPath?: string }) => {
+    setDefaultMode(payload.mode);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('cortex:prefill', { detail: payload }));
+    }
   };
 
   // ─── Continue Build ───────────────────────────────────────────
@@ -346,7 +449,8 @@ export default function Cortex() {
   // ─── SEND ─────────────────────────────────────────────────────
   const handleSend = useCallback(async (
     text: string, mode: AgentMode, role: ChatRole, projectPath: string,
-    attachments: FileAttachment[], selfHeal: boolean
+    attachments: FileAttachment[], selfHeal: boolean,
+    approvedActions = false
   ) => {
     if (!ollamaOk) {
       toast.error('Ollama is not responding', { description: 'Please make sure Ollama is running locally.' });
@@ -381,6 +485,7 @@ export default function Cortex() {
       let responseSessionId = activeSessionId;
       let tokenCount = 0;
       let fullContent = '';
+      let replayWithApproval = false;
 
       abortRef.current = new AbortController();
 
@@ -390,28 +495,105 @@ export default function Cortex() {
           task: text,
           mode: role,
           session_id: activeSessionId,
-          attachments: attachments.length ? attachments : undefined
+          attachments: attachments.length ? attachments : undefined,
+          approved_actions: approvedActions,
         },
         (event) => {
-          if (event.type === 'session') {
+          const ev = event as {
+            type?: string;
+            session_id?: string;
+            delta?: string;
+            message?: string;
+            mode?: string;
+            model?: string;
+            confidence?: number;
+            router_reason?: string;
+            router_keywords?: string[];
+            quality_tier?: 'fast' | 'balanced' | 'high';
+            latency_budget_ms?: number;
+            auto_escalated?: boolean;
+            requested_mode?: string;
+            resolved_mode?: string;
+            fallback_applied?: boolean;
+            reason?: string;
+            matched_keywords?: string[];
+            support_roles?: string[];
+            risk_score?: number;
+          };
+
+          if (ev.type === 'session') {
             // Server assigned a session ID
-            responseSessionId = event.session_id;
-            setActiveSessionId(event.session_id);
-          } else if (event.type === 'chat_stream') {
-            const delta = event.delta || '';
+            responseSessionId = ev.session_id || responseSessionId;
+            if (ev.session_id) setActiveSessionId(ev.session_id);
+          } else if (ev.type === 'log' && ev.resolved_mode) {
+            setMessages(prev => {
+              const updated = [...prev];
+              const idx = updated.findIndex(m => m.id === assistantId);
+              if (idx >= 0) {
+                updated[idx] = {
+                  ...updated[idx],
+                  mode: ev.resolved_mode || updated[idx].mode,
+                  routerDecision: {
+                    requested_mode: ev.requested_mode,
+                    resolved_mode: ev.resolved_mode,
+                    confidence: ev.confidence,
+                    fallback_applied: ev.fallback_applied,
+                    reason: ev.reason,
+                    matched_keywords: ev.matched_keywords,
+                    support_roles: ev.support_roles,
+                    quality_tier: ev.quality_tier,
+                    latency_budget_ms: ev.latency_budget_ms,
+                  },
+                };
+              }
+              return updated;
+            });
+          } else if (ev.type === 'chat_stream') {
+            const delta = ev.delta || '';
             tokenCount++;
             fullContent += delta;
             setMessages(prev => {
               const updated = [...prev];
               const idx = updated.findIndex(m => m.id === assistantId);
               if (idx >= 0) {
-                updated[idx] = { ...updated[idx], content: updated[idx].content + delta };
+                updated[idx] = {
+                  ...updated[idx],
+                  content: updated[idx].content + delta,
+                  mode: ev.mode || updated[idx].mode,
+                  model: ev.model || updated[idx].model,
+                  routerDecision: {
+                    ...updated[idx].routerDecision,
+                    confidence: ev.confidence,
+                    reason: ev.router_reason || updated[idx].routerDecision?.reason,
+                    matched_keywords: ev.router_keywords || updated[idx].routerDecision?.matched_keywords,
+                    quality_tier: ev.quality_tier || updated[idx].routerDecision?.quality_tier,
+                    latency_budget_ms: ev.latency_budget_ms || updated[idx].routerDecision?.latency_budget_ms,
+                    auto_escalated: ev.auto_escalated || updated[idx].routerDecision?.auto_escalated,
+                  },
+                };
               }
               return updated;
             });
-          } else if (event.type === 'error') {
+          } else if (ev.type === 'approval_required') {
+            const reason = ev.reason || 'Approval is required for this high-risk action.';
+            const risk = typeof ev.risk_score === 'number' ? ` (risk ${ev.risk_score})` : '';
+            setMessages(prev => {
+              const updated = [...prev];
+              const idx = updated.findIndex(m => m.id === assistantId);
+              if (idx >= 0) {
+                updated[idx] = {
+                  ...updated[idx],
+                  content: `Approval required${risk}: ${reason}`,
+                  isStreaming: false,
+                  isError: true,
+                };
+              }
+              return updated;
+            });
+            replayWithApproval = window.confirm(`${reason}\n\nProceed anyway?`);
+          } else if (ev.type === 'error') {
             setMessages(prev => [...prev, {
-              id: uid(), role: 'assistant', content: `⚠ ${event.message || 'Unknown error'}`,
+              id: uid(), role: 'assistant', content: `⚠ ${ev.message || 'Unknown error'}`,
               timestamp: Date.now() / 1000, isError: true,
             }]);
           }
@@ -451,6 +633,11 @@ export default function Cortex() {
 
       setContextTokens(prev => prev + Math.round(text.length / 4) + tokenCount);
       setIsStreaming(false);
+
+      if (replayWithApproval) {
+        return handleSend(text, mode, role, projectPath, attachments, selfHeal, true);
+      }
+
       loadSessions();
 
     // ─── BUILD MODE ─────────────────────────────────────────────
@@ -476,6 +663,7 @@ export default function Cortex() {
       if (typeof window !== 'undefined') {
         localStorage.setItem('cortex-last-path', projectPath);
       }
+      setLastKnownPath(projectPath);
       setIsStreaming(true);
       setBuildComplete(false);
 
@@ -485,19 +673,25 @@ export default function Cortex() {
         '/agent/build',
         { task: text, project_path: projectPath, self_heal: selfHeal },
         (event) => {
-          const ev: BuildEvent = { type: event.type, ...event };
+          const parsed = event as {
+            type?: string;
+            delta?: string;
+            phase?: string;
+            plan?: { files?: unknown[] };
+          };
+          const ev: BuildEvent = { type: parsed.type || 'log', ...parsed };
           setBuildEvents(prev => [...prev, ev]);
 
-          if (event.type === 'architect_stream') {
-            setArchitectText(prev => prev + (event.delta || ''));
-          } else if (event.type === 'log') {
-            if (event.phase === 'architect_done' && event.plan?.files) {
-              setTotalFiles(event.plan.files.length);
+          if (parsed.type === 'architect_stream') {
+            setArchitectText(prev => prev + (parsed.delta || ''));
+          } else if (parsed.type === 'log') {
+            if (parsed.phase === 'architect_done' && parsed.plan?.files) {
+              setTotalFiles(parsed.plan.files.length);
             }
-            if (event.phase === 'complete') {
+            if (parsed.phase === 'complete') {
               setBuildComplete(true);
             }
-          } else if (event.type === 'file_created') {
+          } else if (parsed.type === 'file_created') {
             setFileCount(prev => prev + 1);
             setDoneFiles(prev => prev + 1);
           }
@@ -530,15 +724,26 @@ export default function Cortex() {
       if (typeof window !== 'undefined') {
         localStorage.setItem('cortex-last-path', projectPath);
       }
+      setLastKnownPath(projectPath);
       setIsStreaming(true);
 
       abortRef.current = new AbortController();
 
       await streamFetch(
         '/agent/aider',
-        { instruction: text, project_path: projectPath },
+        { instruction: text, project_path: projectPath, approved_actions: approvedActions },
         (event) => {
-          setBuildEvents(prev => [...prev, { type: event.type, ...event }]);
+          const ev = event as { type?: string; reason?: string };
+          setBuildEvents(prev => [...prev, { type: ev.type || 'log', ...ev }]);
+          if (ev.type === 'approval_required') {
+            const reason = ev.reason || 'Approval required for refactor action.';
+            const shouldProceed = window.confirm(`${reason}\n\nProceed with refactor?`);
+            if (shouldProceed) {
+              setTimeout(() => {
+                handleSend(text, mode, role, projectPath, attachments, selfHeal, true);
+              }, 0);
+            }
+          }
         },
         (err) => {
           if (!err.includes('aborted')) setBuildEvents(prev => [...prev, { type: 'error', message: err }]);
@@ -550,6 +755,41 @@ export default function Cortex() {
       loadSessions();
     }
   }, [isStreaming, activeSessionId]);
+
+  const showLeftPanel = isMobile ? mobileSection === 'nav' : sidebarVisible;
+  const showWorkspacePanel = isMobile ? mobileSection === 'workspace' : true;
+  const showRightPanel = isMobile ? mobileSection === 'insight' : true;
+  const desktopLayoutVariant: DesktopLayoutVariant = showLeftPanel ? 'with-left' : 'without-left';
+  const activeDesktopLayout = desktopLayouts[desktopLayoutVariant] ?? DEFAULT_DESKTOP_LAYOUTS[desktopLayoutVariant];
+
+  const persistDesktopLayout = useCallback((variant: DesktopLayoutVariant, layout: Layout) => {
+    const nextLayout = sanitizeLayout(layout, DEFAULT_DESKTOP_LAYOUTS[variant]);
+    setDesktopLayouts(prev => ({ ...prev, [variant]: nextLayout }));
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(getLayoutStorageKey(variant), JSON.stringify(nextLayout));
+    }
+  }, []);
+
+  const handleLayoutChanged = useCallback((layout: Layout) => {
+    if (isMobile) return;
+    persistDesktopLayout(desktopLayoutVariant, layout);
+  }, [isMobile, desktopLayoutVariant, persistDesktopLayout]);
+
+  const handleResetDesktopLayout = useCallback(() => {
+    if (isMobile) return;
+    const resetLayout = DEFAULT_DESKTOP_LAYOUTS[desktopLayoutVariant];
+    persistDesktopLayout(desktopLayoutVariant, resetLayout);
+    panelGroupRef.current?.setLayout(resetLayout);
+    toast.success('Panel layout reset', { description: 'Restored default panel proportions.' });
+  }, [isMobile, desktopLayoutVariant, persistDesktopLayout]);
+
+  useEffect(() => {
+    if (isMobile) return;
+    const raf = window.requestAnimationFrame(() => {
+      panelGroupRef.current?.setLayout(activeDesktopLayout);
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [isMobile, activeDesktopLayout]);
 
   // ─── Render ───────────────────────────────────────────────────
   return (
@@ -614,130 +854,201 @@ export default function Cortex() {
           </div>
         )}
 
-        <div 
-          className="panel-container sidebar-left" 
-          style={{
-            display: (isMobile && mobileSection !== 'nav') || !sidebarVisible ? 'none' : 'flex',
-            width: sidebarWidth,
-          }}
+        <PanelGroup
+          orientation={isMobile ? 'vertical' : 'horizontal'}
+          className="resizable-shell"
+          disabled={isMobile}
+          groupRef={panelGroupRef}
+          defaultLayout={isMobile ? undefined : activeDesktopLayout}
+          onLayoutChanged={handleLayoutChanged}
         >
-          <LeftPanel
-            sessions={sessions}
-            activeSessionId={activeSessionId}
-            pinnedIds={pinnedIds}
-            onSelect={handleSelect}
-            onNew={handleNew}
-            onDelete={handleDelete}
-            onClearAll={handleClearAll}
-            onTogglePin={handleTogglePin}
-            onFileSelect={handleFileSelect}
-            searchQuery={searchQuery}
-            activeTab={activeTab}
-          />
-        </div>
-
-        <div 
-          className="panel-container workspace-center" 
-          style={{ display: isMobile && mobileSection !== 'workspace' ? 'none' : 'flex' }}
-        >
-          <div className="workspace" id="workspace">
-            {/* ── Editor Tabs ── */}
-            {openTabs.length > 0 && !showAgent && (
-              <div className="editor-tabs">
-                {openTabs.map((t, i) => (
-                  <div 
-                    key={t.path} 
-                    className={`editor-tab ${activeTabIdx === i ? 'active' : ''}`}
-                    onClick={() => setActiveTabIdx(i)}
-                  >
-                    <span className="tab-name">{t.path.split(/[\\\/]/).pop()}</span>
-                    <button className="tab-close" onClick={(e) => closeTab(e, i)}><X size={10} /></button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {activeFile && !showAgent ? (
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                <CodeEditor value={activeFile.content} path={activeFile.path} />
-              </div>
-            ) : showAgent ? (
-              <AgentOutput
-                events={buildEvents}
-                architectText={architectText}
-                isRunning={isStreaming}
-                totalFiles={totalFiles}
-                doneFiles={doneFiles}
-                startTime={buildStartTime}
-                buildComplete={buildComplete}
-                onContinue={handleContinueBuild}
-                onRevert={handleRevertBuild}
-                projectPath={lastBuildPath}
-              />
-            ) : messages.length > 0 ? (
-              <div className="chat-scroll" id="chat-container">
-                {messages.map(msg => <MessageBubble key={msg.id} message={msg} sessionId={activeSessionId} />)}
-                <div ref={chatEndRef} />
-              </div>
-            ) : (
-              <div className="ws-empty" id="empty-state">
-                <div className="pro-logo-large">
-                   <Cpu size={48} color="var(--accent)" />
+          {showLeftPanel && (
+            <>
+              <Panel id="left-panel" defaultSize={22} minSize="16%" maxSize="34%">
+                <div className="panel-container sidebar-left">
+                  <LeftPanel
+                    sessions={sessions}
+                    activeSessionId={activeSessionId}
+                    pinnedIds={pinnedIds}
+                    onSelect={handleSelect}
+                    onNew={handleNew}
+                    onDelete={handleDelete}
+                    onClearAll={handleClearAll}
+                    onTogglePin={handleTogglePin}
+                    onFileSelect={handleFileSelect}
+                    searchQuery={searchQuery}
+                    activeTab={activeTab}
+                  />
                 </div>
-                <div className="ws-empty__title">Cortex Pro</div>
-                <div className="ws-empty__desc">
-                  The high-performance local AI coding environment. 
-                  Build, refactor, and chat with private models 100% on-device.
+              </Panel>
+              {!isMobile && (
+                <PanelResizeHandle
+                  className="panel-resize-handle"
+                  onDoubleClick={handleResetDesktopLayout}
+                  title="Drag to resize. Double-click to reset panel sizes."
+                />
+              )}
+            </>
+          )}
+
+          {showWorkspacePanel && (
+            <Panel id="workspace-panel" defaultSize={showLeftPanel ? 53 : 74} minSize="34%">
+              <div className="panel-container workspace-center">
+                <div className="workspace" id="workspace">
+                  {/* ── Editor Tabs ── */}
+                  {openTabs.length > 0 && !showAgent && (
+                    <div className="editor-tabs">
+                      {openTabs.map((t, i) => (
+                        <div
+                          key={t.path}
+                          className={`editor-tab ${activeTabIdx === i ? 'active' : ''}`}
+                          onClick={() => setActiveTabIdx(i)}
+                        >
+                          <span className="tab-name">{t.path.split(/[\\\/]/).pop()}</span>
+                          <button className="tab-close" onClick={(e) => closeTab(e, i)}><X size={10} /></button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {activeFile && !showAgent ? (
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                      <CodeEditor value={activeFile.content} path={activeFile.path} />
+                    </div>
+                  ) : showAgent ? (
+                    <AgentOutput
+                      events={buildEvents}
+                      architectText={architectText}
+                      isRunning={isStreaming}
+                      totalFiles={totalFiles}
+                      doneFiles={doneFiles}
+                      startTime={buildStartTime}
+                      buildComplete={buildComplete}
+                      onContinue={handleContinueBuild}
+                      onRevert={handleRevertBuild}
+                      projectPath={lastBuildPath}
+                    />
+                  ) : messages.length > 0 ? (
+                    <div className="chat-scroll" id="chat-container">
+                      {messages.map(msg => <MessageBubble key={msg.id} message={msg} sessionId={activeSessionId} />)}
+                      <div ref={chatEndRef} />
+                    </div>
+                  ) : (
+                    <div className="ws-empty" id="empty-state">
+                      <div className="pro-logo-large">
+                        <Cpu size={48} color="var(--accent)" />
+                      </div>
+                      <div className="ws-empty__title">Cortex Pro</div>
+                      <div className="ws-empty__desc">
+                        The high-performance local AI coding environment.
+                        Build, refactor, and chat with private models 100% on-device.
+                      </div>
+                      <div className="ws-empty__cards">
+                        <div className="pro-mode-card" onClick={() => handleModeCardClick('chat')} id="mode-card-chat">
+                          <MessageSquare size={20} className="icon-violet" />
+                          <span>Chat</span>
+                        </div>
+                        <div className="pro-mode-card" onClick={() => handleModeCardClick('build')} id="mode-card-build">
+                          <Zap size={20} className="icon-blue" />
+                          <span>Build</span>
+                        </div>
+                        <div className="pro-mode-card" onClick={() => handleModeCardClick('refactor')} id="mode-card-refactor">
+                          <Hammer size={20} className="icon-amber" />
+                          <span>Refactor</span>
+                        </div>
+                      </div>
+                      <div className="ws-empty__workflow">
+                        <span className="ws-workflow-pill">Explore code</span>
+                        <span className="ws-workflow-pill">Build features</span>
+                        <span className="ws-workflow-pill">Review and ship</span>
+                      </div>
+                      <div className="ws-empty__actions">
+                        <button
+                          className="template-chip"
+                          onClick={() => handleQuickStart({
+                            mode: 'chat',
+                            role: 'review',
+                            text: 'Review this repository and list highest-severity risks with concrete fixes.',
+                          })}
+                        >
+                          <span className="t-label">Run Design Review</span>
+                          <span className="t-desc">Get a prioritized architecture and UX audit</span>
+                        </button>
+                        <button
+                          className="template-chip"
+                          onClick={() => handleQuickStart({
+                            mode: 'build',
+                            text: 'Create a production-ready feature with tests and docs.',
+                            projectPath: lastKnownPath,
+                          })}
+                        >
+                          <span className="t-label">Start Build Sprint</span>
+                          <span className="t-desc">Scaffold feature flow and implementation plan</span>
+                        </button>
+                        <button
+                          className="template-chip"
+                          onClick={() => handleQuickStart({
+                            mode: 'refactor',
+                            text: 'Refactor this codebase for clarity and maintainability with minimal risk.',
+                            projectPath: lastKnownPath,
+                          })}
+                        >
+                          <span className="t-label">Start Refactor Sprint</span>
+                          <span className="t-desc">Plan safe restructuring and staged edits</span>
+                        </button>
+                      </div>
+                      {lastKnownPath && (
+                        <div style={{ fontSize: 11, color: 'var(--text-4)', marginTop: 6 }}>
+                          Last workspace path: {lastKnownPath}
+                        </div>
+                      )}
+                      {!ollamaOk && (
+                        <div className="status-warning-box">
+                          <AlertCircle size={14} />
+                          <span>Ollama is not responding. Ensure it's running on port 11434.</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
-                <div className="ws-empty__cards">
-                  <div className="pro-mode-card" onClick={() => handleModeCardClick('chat')} id="mode-card-chat">
-                    <MessageSquare size={20} className="icon-violet" />
-                    <span>Chat</span>
-                  </div>
-                  <div className="pro-mode-card" onClick={() => handleModeCardClick('build')} id="mode-card-build">
-                    <Zap size={20} className="icon-blue" />
-                    <span>Build</span>
-                  </div>
-                  <div className="pro-mode-card" onClick={() => handleModeCardClick('refactor')} id="mode-card-refactor">
-                    <Hammer size={20} className="icon-amber" />
-                    <span>Refactor</span>
-                  </div>
-                </div>
-                {!ollamaOk && (
-                  <div className="status-warning-box">
-                    <AlertCircle size={14} />
-                    <span>Ollama is not responding. Ensure it's running on port 11434.</span>
-                  </div>
-                )}
+
+                <CommandBar
+                  onSend={handleSend}
+                  onStop={handleStop}
+                  isStreaming={isStreaming}
+                  contextTokens={contextTokens}
+                  contextLimit={contextLimit}
+                  defaultMode={defaultMode}
+                />
               </div>
-            )}
-          </div>
+            </Panel>
+          )}
 
-          <CommandBar
-            onSend={handleSend}
-            onStop={handleStop}
-            isStreaming={isStreaming}
-            contextTokens={contextTokens}
-            contextLimit={contextLimit}
-            defaultMode={defaultMode}
-          />
-        </div>
+          {showWorkspacePanel && showRightPanel && !isMobile && (
+            <PanelResizeHandle
+              className="panel-resize-handle"
+              onDoubleClick={handleResetDesktopLayout}
+              title="Drag to resize. Double-click to reset panel sizes."
+            />
+          )}
 
-        <div 
-          className="panel-container sidebar-right" 
-          style={isMobile && mobileSection !== 'insight' ? { display: 'none' } : undefined}
-        >
-          <RightPanel
-            activeSession={activeSession}
-            fileCount={fileCount}
-            isRunning={isStreaming}
-            doneFiles={doneFiles}
-            totalFiles={totalFiles}
-            contextTokens={contextTokens}
-            contextLimit={contextLimit}
-            activeFile={activeFile}
-          />
-        </div>
+          {showRightPanel && (
+            <Panel id="right-panel" defaultSize={showLeftPanel ? 25 : 26} minSize="18%" maxSize="40%">
+              <div className="panel-container sidebar-right">
+                <RightPanel
+                  activeSession={activeSession}
+                  fileCount={fileCount}
+                  isRunning={isStreaming}
+                  doneFiles={doneFiles}
+                  totalFiles={totalFiles}
+                  contextTokens={contextTokens}
+                  contextLimit={contextLimit}
+                  activeFile={activeFile}
+                />
+              </div>
+            </Panel>
+          )}
+        </PanelGroup>
       </div>
 
       {isMobile && (

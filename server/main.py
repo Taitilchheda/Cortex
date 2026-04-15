@@ -15,6 +15,7 @@ import subprocess
 import shutil
 import sqlite3
 import uuid
+import re
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, UploadFile, File, Request, HTTPException, BackgroundTasks, WebSocket, Form
@@ -29,21 +30,35 @@ from api.state import (
     set_preference, get_preference, list_preferences
 )
 from api.memory import init_memory_db
+from api.config import init_cortex_workspace, router as cortex_config_router
+from api.environments import init_environments_db, router as environments_router
+from api.plugins import initialize_plugins, router as plugins_router
+from api.skills import router as skills_router
+from api.hardware import router as hardware_router
+from api.checkpoints import init_checkpoints_db, router as checkpoints_router
+from api.connectors import init_connectors_db, router as connectors_router
 from config.models import (
     MODEL_ROUTER, get_model_for_role, update_router, 
-    check_ollama_health, fetch_ollama_models, recommend_models,
+    check_ollama_health, fetch_ollama_models, recommend_models, fetch_unified_models,
     OLLAMA_BASE, BENCHMARK_DB
 )
 from agents.orchestrator import (
     run_build, run_chat, run_aider, openai_chat_completion, 
-    PROJECT_TEMPLATES
+    PROJECT_TEMPLATES, get_router_metrics, reset_router_metrics, record_router_feedback
 )
+from agents.skill_runner import init_skill_registry
 
 # ─── Lifespan ─────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
     await init_memory_db()
+    init_cortex_workspace()
+    await init_environments_db()
+    await init_checkpoints_db()
+    await init_connectors_db()
+    await init_skill_registry()
+    await initialize_plugins(app)
     persisted = await get_preference("agent_settings", None)
     if isinstance(persisted, dict):
         _agent_settings.update(persisted)
@@ -55,6 +70,14 @@ app = FastAPI(
     version="5.0.0",
     lifespan=lifespan,
 )
+
+app.include_router(cortex_config_router)
+app.include_router(environments_router)
+app.include_router(plugins_router)
+app.include_router(skills_router)
+app.include_router(hardware_router)
+app.include_router(checkpoints_router)
+app.include_router(connectors_router)
 
 @app.middleware("http")
 async def request_observability(request: Request, call_next):
@@ -83,13 +106,17 @@ class BuildRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     task: str
-    mode: str = "coder"
+    mode: str = "auto"
     session_id: Optional[str] = None
     attachments: Optional[list] = None
+    approved_actions: bool = False
+    latency_budget_ms: Optional[int] = None
+    quality_tier: str = "balanced"
 
 class AiderRequest(BaseModel):
     instruction: str
     project_path: str
+    approved_actions: bool = False
 
 class RecommendRequest(BaseModel):
     vram_gb: float
@@ -145,6 +172,18 @@ class FileWriteRequest(BaseModel):
 class GitCommitRequest(BaseModel):
     path: str
     message: str
+    commit_all: bool = True
+
+class GitPathRequest(BaseModel):
+    path: str
+
+class GitFileActionRequest(BaseModel):
+    path: str
+    file_path: str
+
+class GitRefRequest(BaseModel):
+    path: str
+    ref: str
 
 class PreferenceUpdateRequest(BaseModel):
     key: str
@@ -197,6 +236,7 @@ async def root():
             "openai": "/v1/chat/completions",
             "models": "/v1/models",
             "templates": "/templates",
+            "connectors": "/connectors",
         }
     }
 
@@ -265,6 +305,16 @@ async def status():
         "uptime": time.time(),
     }
 
+
+@app.get("/router/metrics")
+async def router_metrics():
+    return {"metrics": get_router_metrics()}
+
+
+@app.post("/router/metrics/reset")
+async def router_metrics_reset():
+    return {"metrics": reset_router_metrics()}
+
 # ─── Agent Endpoints ─────────────────────────────────────────────
 @app.post("/agent/build")
 async def agent_build(req: BuildRequest):
@@ -315,6 +365,9 @@ async def agent_chat(req: ChatRequest):
             session_id,
             req.attachments,
             _agent_settings.get("local_only", False),
+            req.approved_actions or (_agent_settings.get("auto_approve") == "always_proceed"),
+            req.latency_budget_ms,
+            req.quality_tier,
         ):
             yield sse_format(event["type"], event["data"])
 
@@ -335,7 +388,8 @@ async def agent_aider(req: AiderRequest):
     session_id = session["id"]
 
     async def event_stream():
-        async for event in run_aider(req.instruction, req.project_path, session_id):
+        auto_approved = req.approved_actions or (_agent_settings.get("auto_approve") == "always_proceed")
+        async for event in run_aider(req.instruction, req.project_path, session_id, auto_approved):
             yield sse_format(event["type"], event["data"])
 
     return StreamingResponse(
@@ -371,6 +425,13 @@ async def v1_models():
             for m in models
         ]
     }
+
+
+@app.get("/models/catalog")
+async def unified_models_catalog():
+    """Unified model catalog scaffold: local + cloud + OpenRouter (if configured)."""
+    models = await fetch_unified_models()
+    return {"models": models, "count": len(models)}
 
 @app.post("/v1/chat/completions")
 async def v1_chat_completions(req: OpenAIChatRequest):
@@ -700,6 +761,44 @@ async def git_status(path: str):
         timeout=10,
     ).stdout.strip()
 
+    repo_root_proc = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    repo_root = repo_root_proc.stdout.strip() or repo_path
+
+    upstream_proc = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    upstream = upstream_proc.stdout.strip() if upstream_proc.returncode == 0 else None
+
+    ahead = 0
+    behind = 0
+    if upstream:
+        ahead_behind_proc = subprocess.run(
+            ["git", "rev-list", "--left-right", "--count", f"HEAD...{upstream}"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if ahead_behind_proc.returncode == 0:
+            parts = ahead_behind_proc.stdout.strip().split()
+            if len(parts) == 2:
+                try:
+                    ahead = int(parts[0])
+                    behind = int(parts[1])
+                except ValueError:
+                    ahead = 0
+                    behind = 0
+
     raw = subprocess.run(
         ["git", "status", "--porcelain"],
         cwd=repo_path,
@@ -710,38 +809,338 @@ async def git_status(path: str):
 
     staged = []
     modified = []
+    untracked = []
+    conflicts = []
+    changes = []
+
+    conflict_pairs = {
+        ("D", "D"),
+        ("A", "U"),
+        ("U", "D"),
+        ("U", "A"),
+        ("D", "U"),
+        ("A", "A"),
+        ("U", "U"),
+    }
+
+    def status_bucket(x: str, y: str) -> str:
+        if x == "?" and y == "?":
+            return "untracked"
+        if (x, y) in conflict_pairs or x == "U" or y == "U":
+            return "conflict"
+        if x != " " and y != " ":
+            return "staged+modified"
+        if x != " ":
+            return "staged"
+        if y != " ":
+            return "modified"
+        return "clean"
+
     for line in raw:
         if len(line) < 4:
             continue
         x = line[0]
         y = line[1]
         p = line[3:]
-        if x != " ":
+        if " -> " in p:
+            p = p.split(" -> ", 1)[1]
+        bucket = status_bucket(x, y)
+        changes.append({
+            "path": p,
+            "staged_status": x,
+            "unstaged_status": y,
+            "status": bucket,
+        })
+        if x not in (" ", "?"):
             staged.append(p)
-        if y != " ":
+        if y not in (" ", "?"):
             modified.append(p)
+        if x == "?" and y == "?":
+            untracked.append(p)
+        if (x, y) in conflict_pairs or x == "U" or y == "U":
+            conflicts.append(p)
 
-    commits_raw = subprocess.run(
-        ["git", "log", "--oneline", "-n", "5"],
+    commit_graph_raw = subprocess.run(
+        [
+            "git",
+            "log",
+            "--graph",
+            "--date=relative",
+            "--pretty=format:%h%x1f%an%x1f%ar%x1f%s%x1f%D%x1f%P",
+            "-n",
+            "80",
+        ],
         cwd=repo_path,
         capture_output=True,
         text=True,
         timeout=10,
     ).stdout.splitlines()
+
+    graph_commit_re = re.compile(r"[0-9a-f]{7,40}\x1f")
     recent_commits = []
-    for c in commits_raw:
+    for c in commit_graph_raw:
         if not c.strip():
             continue
-        parts = c.split(" ", 1)
-        if len(parts) == 2:
-            recent_commits.append({"hash": parts[0], "msg": parts[1], "date": "recent"})
+        match = graph_commit_re.search(c)
+        if not match:
+            continue
+
+        graph_prefix = c[: match.start()].rstrip("\n")
+        payload = c[match.start() :]
+        parts = payload.split("\x1f")
+        if len(parts) < 6:
+            continue
+        commit_hash, author, rel_date, msg, refs, parents = parts[:6]
+        parent_list = [p for p in parents.split() if p]
+        recent_commits.append({
+            "hash": commit_hash,
+            "msg": msg,
+            "date": rel_date,
+            "author": author,
+            "refs": refs,
+            "parents": parent_list,
+            "is_merge": len(parent_list) > 1,
+            "graph": graph_prefix,
+        })
+
+    local_branches_raw = subprocess.run(
+        ["git", "for-each-ref", "--format=%(refname:short)", "refs/heads"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    ).stdout.splitlines()
+    local_branches = [b.strip() for b in local_branches_raw if b.strip()]
+
+    remote_branches_raw = subprocess.run(
+        ["git", "for-each-ref", "--format=%(refname:short)", "refs/remotes"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    ).stdout.splitlines()
+    remote_branches = [
+        b.strip()
+        for b in remote_branches_raw
+        if b.strip() and not b.strip().endswith("/HEAD")
+    ]
 
     return {
         "branch": branch,
+        "upstream": upstream,
+        "ahead": ahead,
+        "behind": behind,
+        "detached": branch == "HEAD",
+        "repo_root": repo_root,
+        "local_branches": local_branches,
+        "remote_branches": remote_branches,
         "modified": modified,
         "staged": staged,
+        "untracked": untracked,
+        "conflicts": conflicts,
+        "changes": changes,
+        "counts": {
+            "staged": len(staged),
+            "modified": len(modified),
+            "untracked": len(untracked),
+            "conflicts": len(conflicts),
+            "total": len(changes),
+        },
         "recent_commits": recent_commits,
+        "last_updated": time.time(),
     }
+
+
+@app.post("/git/stage")
+async def git_stage(req: GitFileActionRequest):
+    """Stage a single file path."""
+    repo_path = os.path.abspath(req.path)
+    if not os.path.isdir(os.path.join(repo_path, ".git")):
+        raise HTTPException(status_code=400, detail="Not a git repository")
+    file_path = (req.file_path or "").strip()
+    if not file_path:
+        raise HTTPException(status_code=400, detail="file_path is required")
+
+    proc = subprocess.run(
+        ["git", "add", "--", file_path],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    if proc.returncode != 0:
+        raise HTTPException(status_code=400, detail=proc.stderr or proc.stdout or "git add failed")
+    return {"status": "staged", "file_path": file_path}
+
+
+@app.post("/git/stage-all")
+async def git_stage_all(req: GitPathRequest):
+    """Stage all changes in repository."""
+    repo_path = os.path.abspath(req.path)
+    if not os.path.isdir(os.path.join(repo_path, ".git")):
+        raise HTTPException(status_code=400, detail="Not a git repository")
+
+    proc = subprocess.run(
+        ["git", "add", "-A"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    if proc.returncode != 0:
+        raise HTTPException(status_code=400, detail=proc.stderr or proc.stdout or "git add -A failed")
+    return {"status": "staged_all"}
+
+
+@app.post("/git/unstage")
+async def git_unstage(req: GitFileActionRequest):
+    """Unstage a single file path."""
+    repo_path = os.path.abspath(req.path)
+    if not os.path.isdir(os.path.join(repo_path, ".git")):
+        raise HTTPException(status_code=400, detail="Not a git repository")
+    file_path = (req.file_path or "").strip()
+    if not file_path:
+        raise HTTPException(status_code=400, detail="file_path is required")
+
+    proc = subprocess.run(
+        ["git", "restore", "--staged", "--", file_path],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    if proc.returncode != 0:
+        fallback = subprocess.run(
+            ["git", "reset", "HEAD", "--", file_path],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if fallback.returncode != 0:
+            raise HTTPException(status_code=400, detail=fallback.stderr or fallback.stdout or proc.stderr or proc.stdout or "git unstage failed")
+    return {"status": "unstaged", "file_path": file_path}
+
+
+@app.post("/git/unstage-all")
+async def git_unstage_all(req: GitPathRequest):
+    """Unstage all currently staged files."""
+    repo_path = os.path.abspath(req.path)
+    if not os.path.isdir(os.path.join(repo_path, ".git")):
+        raise HTTPException(status_code=400, detail="Not a git repository")
+
+    proc = subprocess.run(
+        ["git", "reset"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    if proc.returncode != 0:
+        raise HTTPException(status_code=400, detail=proc.stderr or proc.stdout or "git reset failed")
+    return {"status": "unstaged_all"}
+
+
+@app.post("/git/discard")
+async def git_discard(req: GitFileActionRequest):
+    """Discard local changes for a single file (or remove an untracked file)."""
+    repo_path = os.path.abspath(req.path)
+    if not os.path.isdir(os.path.join(repo_path, ".git")):
+        raise HTTPException(status_code=400, detail="Not a git repository")
+    file_path = (req.file_path or "").strip()
+    if not file_path:
+        raise HTTPException(status_code=400, detail="file_path is required")
+
+    status_proc = subprocess.run(
+        ["git", "status", "--porcelain", "--", file_path],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    status_line = (status_proc.stdout or "").strip()
+
+    if status_line.startswith("??"):
+        proc = subprocess.run(
+            ["git", "clean", "-f", "--", file_path],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if proc.returncode != 0:
+            raise HTTPException(status_code=400, detail=proc.stderr or proc.stdout or "git clean failed")
+    else:
+        proc = subprocess.run(
+            ["git", "restore", "--", file_path],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if proc.returncode != 0:
+            raise HTTPException(status_code=400, detail=proc.stderr or proc.stdout or "git restore failed")
+    return {"status": "discarded", "file_path": file_path}
+
+
+@app.post("/git/checkout")
+async def git_checkout(req: GitRefRequest):
+    """Checkout a branch or ref."""
+    repo_path = os.path.abspath(req.path)
+    if not os.path.isdir(os.path.join(repo_path, ".git")):
+        raise HTTPException(status_code=400, detail="Not a git repository")
+    ref = (req.ref or "").strip()
+    if not ref:
+        raise HTTPException(status_code=400, detail="ref is required")
+
+    proc = subprocess.run(
+        ["git", "checkout", ref],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    if proc.returncode != 0:
+        raise HTTPException(status_code=400, detail=proc.stderr or proc.stdout or "git checkout failed")
+    return {"status": "checked_out", "ref": ref}
+
+
+@app.post("/git/pull")
+async def git_pull(req: GitPathRequest):
+    """Pull remote changes (fast-forward only)."""
+    repo_path = os.path.abspath(req.path)
+    if not os.path.isdir(os.path.join(repo_path, ".git")):
+        raise HTTPException(status_code=400, detail="Not a git repository")
+
+    proc = subprocess.run(
+        ["git", "pull", "--ff-only"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=40,
+    )
+    if proc.returncode != 0:
+        raise HTTPException(status_code=400, detail=proc.stderr or proc.stdout or "git pull failed")
+    return {"status": "pulled", "output": (proc.stdout or "").strip()}
+
+
+@app.post("/git/push")
+async def git_push(req: GitPathRequest):
+    """Push local commits to upstream."""
+    repo_path = os.path.abspath(req.path)
+    if not os.path.isdir(os.path.join(repo_path, ".git")):
+        raise HTTPException(status_code=400, detail="Not a git repository")
+
+    proc = subprocess.run(
+        ["git", "push"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=40,
+    )
+    if proc.returncode != 0:
+        raise HTTPException(status_code=400, detail=proc.stderr or proc.stdout or "git push failed")
+    return {"status": "pushed", "output": (proc.stdout or "").strip()}
 
 @app.post("/git/commit")
 async def git_commit(req: GitCommitRequest):
@@ -752,15 +1151,28 @@ async def git_commit(req: GitCommitRequest):
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="Commit message is required")
 
-    add_proc = subprocess.run(
-        ["git", "add", "."],
+    if req.commit_all:
+        add_proc = subprocess.run(
+            ["git", "add", "-A"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if add_proc.returncode != 0:
+            raise HTTPException(status_code=500, detail=add_proc.stderr or add_proc.stdout or "git add failed")
+
+    has_staged_proc = subprocess.run(
+        ["git", "diff", "--cached", "--quiet"],
         cwd=repo_path,
         capture_output=True,
         text=True,
-        timeout=20,
+        timeout=10,
     )
-    if add_proc.returncode != 0:
-        raise HTTPException(status_code=500, detail=add_proc.stderr or "git add failed")
+    if has_staged_proc.returncode == 0:
+        raise HTTPException(status_code=400, detail="No staged changes to commit")
+    if has_staged_proc.returncode not in (0, 1):
+        raise HTTPException(status_code=500, detail=has_staged_proc.stderr or has_staged_proc.stdout or "Unable to inspect staged changes")
 
     commit_proc = subprocess.run(
         ["git", "commit", "-m", req.message],
@@ -772,16 +1184,18 @@ async def git_commit(req: GitCommitRequest):
     if commit_proc.returncode != 0:
         raise HTTPException(status_code=400, detail=commit_proc.stderr or commit_proc.stdout or "git commit failed")
 
-    return {"status": "committed", "message": req.message}
+    return {"status": "committed", "message": req.message, "commit_all": req.commit_all}
 
 @app.post("/sessions/{session_id}/feedback")
 async def submit_feedback(session_id: str, req: FeedbackRequest):
     """Store thumbs up/down feedback for a specific agent message"""
+    if req.feedback in {"up", "down"}:
+        record_router_feedback(req.feedback)
     await add_event(session_id, "feedback", {
         "message_id": req.message_id,
         "feedback": req.feedback,
     })
-    return {"status": "success"}
+    return {"status": "success", "router_metrics": get_router_metrics()}
 
 # ─── Notifications ───────────────────────────────────────────────
 @app.get("/notifications")

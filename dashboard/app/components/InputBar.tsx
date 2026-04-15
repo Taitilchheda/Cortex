@@ -38,6 +38,7 @@ const MODES: { key: AgentMode; icon: any; label: string; desc: string; color: st
 ];
 
 const ROLES: { key: ChatRole; label: string; desc: string; icon: any; color: string }[] = [
+  { key: 'auto', label: 'Auto', desc: 'Route by task intent', icon: Sparkles, color: '#22c55e' },
   { key: 'coder', label: 'Coder', desc: 'Writes production code', icon: Code2, color: '#3b82f6' },
   { key: 'debug', label: 'Debugger', desc: 'Finds and fixes bugs', icon: Bug, color: '#ef4444' },
   { key: 'architect', label: 'Architect', desc: 'System design expert', icon: Brain, color: '#8b5cf6' },
@@ -56,7 +57,7 @@ const TEMPLATES = [
 export default function CommandBar({ onSend, onStop, isStreaming, contextTokens, contextLimit, defaultMode }: CommandBarProps) {
   const [text, setText] = useState('');
   const [mode, setMode] = useState<AgentMode>(defaultMode || 'chat');
-  const [role, setRole] = useState<ChatRole>('coder');
+  const [role, setRole] = useState<ChatRole>('auto');
   const [projectPath, setProjectPath] = useState('');
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const [selfHeal, setSelfHeal] = useState(false);
@@ -67,6 +68,34 @@ export default function CommandBar({ onSend, onStop, isStreaming, contextTokens,
   useEffect(() => {
     if (defaultMode) setMode(defaultMode);
   }, [defaultMode]);
+
+  useEffect(() => {
+    if ((mode === 'build' || mode === 'refactor') && !projectPath && typeof window !== 'undefined') {
+      const remembered = localStorage.getItem('cortex-last-path') || '';
+      if (remembered) setProjectPath(remembered);
+    }
+  }, [mode, projectPath]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onPrefill = (event: Event) => {
+      const custom = event as CustomEvent<{ text?: string; mode?: AgentMode; role?: ChatRole; projectPath?: string }>;
+      const payload = custom.detail || {};
+      if (payload.mode) setMode(payload.mode);
+      if (payload.role) setRole(payload.role);
+      if (payload.projectPath != null) setProjectPath(payload.projectPath);
+      if (payload.text != null) {
+        setText(payload.text);
+        setTimeout(() => {
+          adjustHeight();
+          textRef.current?.focus();
+        }, 0);
+      }
+    };
+
+    window.addEventListener('cortex:prefill', onPrefill as EventListener);
+    return () => window.removeEventListener('cortex:prefill', onPrefill as EventListener);
+  }, []);
 
   const handleSend = useCallback(() => {
     let finalText = text.trim();
@@ -215,6 +244,18 @@ export default function CommandBar({ onSend, onStop, isStreaming, contextTokens,
              </>
            )}
         </div>
+      </div>
+
+      <div className="workflow-strip" aria-label="Current workflow policy">
+        <span className="workflow-chip">Mode: {mode}</span>
+        {mode === 'chat' && <span className="workflow-chip">Role: {role}</span>}
+        {(mode === 'build' || mode === 'refactor') && (
+          <>
+            <span className="workflow-chip">Path: {projectPath ? truncate(projectPath, 28) : 'not set'}</span>
+            <span className="workflow-chip">Self-heal: {selfHeal ? 'on' : 'off'}</span>
+          </>
+        )}
+        <span className="workflow-chip">Attachments: {attachments.length}</span>
       </div>
 
       {/* Attachments UI */}

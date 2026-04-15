@@ -1,12 +1,56 @@
 // Cortex — API Client
 // All fetch calls to :8000
 
-const API_BASE = 'http://localhost:8000';
+const ENV_API_BASE = (typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_API_BASE : '') || '';
+
+function normalizeBase(base: string): string {
+  return String(base || '').trim().replace(/\/+$/, '');
+}
+
+function runtimeApiBase(): string {
+  if (typeof window === 'undefined') return 'http://localhost:8000';
+  const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+  const host = window.location.hostname || 'localhost';
+  return `${protocol}//${host}:8000`;
+}
+
+function apiBaseCandidates(): string[] {
+  const seen = new Set<string>();
+  const bases = [
+    normalizeBase(ENV_API_BASE),
+    normalizeBase(runtimeApiBase()),
+    'http://localhost:8000',
+    'http://127.0.0.1:8000',
+  ];
+  const out: string[] = [];
+  for (const base of bases) {
+    if (!base || seen.has(base)) continue;
+    seen.add(base);
+    out.push(base);
+  }
+  return out;
+}
+
+async function requestWithFallback(path: string, init?: RequestInit): Promise<Response> {
+  const bases = apiBaseCandidates();
+  let lastErr: unknown = null;
+
+  for (let i = 0; i < bases.length; i += 1) {
+    try {
+      return await fetch(`${bases[i]}${path}`, init);
+    } catch (err) {
+      lastErr = err;
+      if (i === bases.length - 1) throw err;
+    }
+  }
+
+  throw lastErr || new Error('Failed to fetch');
+}
 
 // ─── SSE Parser ─────────────────────────────────────────────────
 export function parseSSE(
   text: string,
-  onEvent: (event: any) => void
+  onEvent: (event: Record<string, unknown>) => void
 ): void {
   const lines = text.split('\n');
   for (const line of lines) {
@@ -27,13 +71,13 @@ export function parseSSE(
 // ─── Streaming Fetch ────────────────────────────────────────────
 export async function streamFetch(
   url: string,
-  body: any,
-  onEvent: (event: any) => void,
+  body: Record<string, unknown>,
+  onEvent: (event: Record<string, unknown>) => void,
   onError?: (err: string) => void,
   signal?: AbortSignal
 ): Promise<void> {
   try {
-    const resp = await fetch(`${API_BASE}${url}`, {
+    const resp = await requestWithFallback(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -76,11 +120,11 @@ export async function streamFetch(
 
 // ─── REST Endpoints ─────────────────────────────────────────────
 async function get(path: string) {
-  const resp = await fetch(`${API_BASE}${path}`);
+  const resp = await requestWithFallback(path);
   return resp.json();
 }
 async function post(path: string, body?: any) {
-  const resp = await fetch(`${API_BASE}${path}`, {
+  const resp = await requestWithFallback(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
@@ -88,7 +132,7 @@ async function post(path: string, body?: any) {
   return resp.json();
 }
 async function del(path: string) {
-  const resp = await fetch(`${API_BASE}${path}`, { method: 'DELETE' });
+  const resp = await requestWithFallback(path, { method: 'DELETE' });
   return resp.json();
 }
 
@@ -103,6 +147,8 @@ export const updateRouter = (router: Record<string, string>) => post('/config/ro
 export const fetchRecommendations = (vram_gb: number, ram_gb: number, priority: string) =>
   post('/system/recommend', { vram_gb, ram_gb, priority });
 export const fetchModels = () => get('/v1/models');
+export const fetchModelCatalog = () => get('/models/catalog');
+export const fetchHardwareStats = () => get('/hardware/stats');
 export const fetchTemplates = () => get('/templates');
 export const fetchBenchmarks = () => get('/benchmarks');
 
@@ -124,13 +170,37 @@ export const submitFeedback = (sessionId: string, messageId: string, feedback: '
 export const configureTools = (tools: any) => post('/settings/tools', { tools });
 export const fetchFeatureHealth = () => get('/health/features');
 export const fetchContractHealth = () => get('/health/contracts');
+export const fetchRouterMetrics = () => get('/router/metrics');
+export const resetRouterMetrics = () => post('/router/metrics/reset');
 export const fetchGitStatus = (path: string) => get(`/git/status?path=${encodeURIComponent(path)}`);
-export const commitGit = (path: string, message: string) => post('/git/commit', { path, message });
+export const commitGit = (path: string, message: string, commit_all = true) => post('/git/commit', { path, message, commit_all });
+export const stageGitFile = (path: string, filePath: string) => post('/git/stage', { path, file_path: filePath });
+export const stageAllGit = (path: string) => post('/git/stage-all', { path });
+export const unstageGitFile = (path: string, filePath: string) => post('/git/unstage', { path, file_path: filePath });
+export const unstageAllGit = (path: string) => post('/git/unstage-all', { path });
+export const discardGitFile = (path: string, filePath: string) => post('/git/discard', { path, file_path: filePath });
+export const checkoutGitRef = (path: string, ref: string) => post('/git/checkout', { path, ref });
+export const pullGit = (path: string) => post('/git/pull', { path });
+export const pushGit = (path: string) => post('/git/push', { path });
+export const fetchPreferences = () => get('/settings/preferences');
+export const setPreference = (key: string, value: any) => post('/settings/preferences', { key, value });
+export const fetchToolsRegistry = () => get('/tools/registry');
+export const fetchQueue = () => get('/queue');
+export const enqueueTask = (task: string, mode: string, project_path?: string) =>
+  post('/queue', { task, mode, project_path });
+export const deleteQueueTask = (taskId: string) => del(`/queue/${encodeURIComponent(taskId)}`);
+export const fetchSkills = () => get('/skills');
+export const reloadSkills = () => post('/skills/reload');
+export const enableSkill = (skillName: string) => post(`/skills/${encodeURIComponent(skillName)}/enable`);
+export const disableSkill = (skillName: string) => post(`/skills/${encodeURIComponent(skillName)}/disable`);
+export const runSkill = (skillName: string, body?: Record<string, unknown>) => post(`/skills/${encodeURIComponent(skillName)}/run`, body || {});
+export const fetchEnvironmentLatestPreview = () => get('/environments/latest/preview');
+export const fetchEnvironmentSessionPreview = (sessionId: string) => get(`/environments/${encodeURIComponent(sessionId)}/preview`);
 
 export async function uploadFile(file: File) {
   const formData = new FormData();
   formData.append('file', file);
-  const resp = await fetch(`${API_BASE}/files/upload`, {
+  const resp = await requestWithFallback('/files/upload', {
     method: 'POST',
     body: formData,
   });

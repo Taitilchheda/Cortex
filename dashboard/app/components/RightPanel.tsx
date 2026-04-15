@@ -1,10 +1,13 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { Session, AgentSettings } from '../lib/types';
+import { Session, AgentSettings, QueueTask, ToolRegistryItem, RouterMetrics } from '../lib/types';
 import {
   fetchRecommendations, fetchModels, fetchRouter, updateRouter,
   fetchAgentSettings, updateAgentSettings, configureTools,
-  fetchFeatureHealth, fetchContractHealth
+  fetchFeatureHealth, fetchContractHealth,
+  fetchPreferences, setPreference,
+  fetchToolsRegistry,
+  fetchQueue, enqueueTask, deleteQueueTask, fetchRouterMetrics,
 } from '../lib/api';
 import { 
   Activity, 
@@ -12,14 +15,13 @@ import {
   Settings, 
   Plug, 
   Binary, 
-  Cpu, 
-  Database, 
-  Zap,
   HardDrive,
   Globe2,
   List
 } from 'lucide-react';
 import CodeOutline from './CodeOutline';
+import ModelPicker from './ModelPicker';
+import HardwareDashboard from './HardwareDashboard';
 
 interface RightPanelProps {
   activeSession: Session | null;
@@ -33,6 +35,7 @@ interface RightPanelProps {
 }
 
 type TabKey = 'context' | 'monitor' | 'advisor' | 'settings' | 'api' | 'tools' | 'outline';
+type ExtendedTabKey = TabKey | 'queue';
 
 const API_ENDPOINTS = [
   { method: 'GET', path: '/', desc: 'Server info + Ollama status' },
@@ -42,6 +45,8 @@ const API_ENDPOINTS = [
   { method: 'POST', path: '/agent/aider', desc: 'Aider refactor (SSE)' },
   { method: 'POST', path: '/v1/chat/completions', desc: 'OpenAI-compatible' },
   { method: 'GET', path: '/v1/models', desc: 'Model list' },
+  { method: 'GET', path: '/models/catalog', desc: 'Unified local/cloud catalog' },
+  { method: 'GET', path: '/hardware/stats', desc: 'Hardware telemetry snapshot' },
 ];
 
 const ROLES = ['architect', 'coder', 'debug', 'quick', 'explain', 'review'];
@@ -49,7 +54,7 @@ const ROLES = ['architect', 'coder', 'debug', 'quick', 'explain', 'review'];
 export default function RightPanel({
   activeSession, fileCount, isRunning, doneFiles, totalFiles, contextTokens, contextLimit, activeFile
 }: RightPanelProps) {
-  const [tab, setTab] = useState<TabKey>('context');
+  const [tab, setTab] = useState<ExtendedTabKey>('context');
   const [vram, setVram] = useState('12');
   const [ram, setRam] = useState('32');
   const [priority, setPriority] = useState('balanced');
@@ -60,28 +65,61 @@ export default function RightPanel({
   const [saved, setSaved] = useState('');
   const [settings, setSettings] = useState<AgentSettings>({
     auto_approve: 'ask', max_files: 50, max_retries: 1,
-    self_heal_count: 3, review_on_build: false, test_on_build: false, context_limit: 32768, local_only: false,
+    self_heal_count: 3, review_on_build: false, test_on_build: false, context_limit: 32768, local_only: false, protected_paths: [],
   });
+  const [protectedPathsText, setProtectedPathsText] = useState('');
+  const [prefProjectPath, setPrefProjectPath] = useState('');
+  const [prefDefaultMode, setPrefDefaultMode] = useState('chat');
   const [featureHealth, setFeatureHealth] = useState<any>(null);
   const [contractHealth, setContractHealth] = useState<any>(null);
-  const [toolConfig, setToolConfig] = useState<Record<string, boolean>>({
-    web_search: true,
-    rag_index: false,
-    code_review: true,
-    telemetry: true,
-  });
+  const [toolRegistry, setToolRegistry] = useState<ToolRegistryItem[]>([]);
+  const [toolConfig, setToolConfig] = useState<Record<string, boolean>>({});
   const [toolSaving, setToolSaving] = useState(false);
+  const [prefSaving, setPrefSaving] = useState(false);
+  const [queueLoading, setQueueLoading] = useState(false);
+  const [queueSaving, setQueueSaving] = useState(false);
+  const [queueDraftTask, setQueueDraftTask] = useState('');
+  const [queueDraftMode, setQueueDraftMode] = useState('chat');
+  const [queueDraftPath, setQueueDraftPath] = useState('');
+  const [queueTasks, setQueueTasks] = useState<QueueTask[]>([]);
+  const [routerMetrics, setRouterMetrics] = useState<RouterMetrics | null>(null);
+
+  const refreshRouterMetrics = async () => {
+    try {
+      const data = await fetchRouterMetrics();
+      setRouterMetrics(data.metrics || null);
+    } catch {
+      // ignore
+    }
+  };
 
   useEffect(() => {
     fetchModels().then(d => setModels(d.data?.map((m: any) => m.id) || [])).catch(() => {});
     fetchRouter().then(d => setRouter(d.router || {})).catch(() => {});
-    fetchAgentSettings().then(d => setSettings(d)).catch(() => {});
+    fetchAgentSettings().then(d => {
+      setSettings(d);
+      setProtectedPathsText((d.protected_paths || []).join('\n'));
+    }).catch(() => {});
     fetchFeatureHealth().then(setFeatureHealth).catch(() => {});
     fetchContractHealth().then(setContractHealth).catch(() => {});
-    const stored = typeof window !== 'undefined' ? localStorage.getItem('cortex-tools') : null;
-    if (stored) {
-      try { setToolConfig(JSON.parse(stored)); } catch {}
-    }
+    fetchToolsRegistry().then(d => {
+      const tools = d.tools || [];
+      setToolRegistry(tools);
+      setToolConfig(Object.fromEntries(tools.map((t: ToolRegistryItem) => [t.key, !!t.enabled])));
+    }).catch(() => {});
+    fetchPreferences().then(d => {
+      const prefs = d.preferences || {};
+      if (typeof prefs.default_project_path === 'string') setPrefProjectPath(prefs.default_project_path);
+      if (typeof prefs.default_mode === 'string') setPrefDefaultMode(prefs.default_mode);
+    }).catch(() => {});
+    refreshQueue();
+    refreshRouterMetrics();
+
+    const metricsTimer = setInterval(() => {
+      refreshRouterMetrics();
+    }, 5000);
+
+    return () => clearInterval(metricsTimer);
   }, []);
 
   useEffect(() => {
@@ -90,11 +128,34 @@ export default function RightPanel({
 
   const doRecommend = async () => {
     setLoading(true);
+    setRecommendation(null);
+
+    const parsedVram = Number.parseFloat(vram);
+    const parsedRam = Number.parseFloat(ram);
+    if (!Number.isFinite(parsedVram) || parsedVram <= 0 || !Number.isFinite(parsedRam) || parsedRam <= 0) {
+      setRecommendation({ error: 'Enter valid positive VRAM and RAM values before running analysis.' });
+      setLoading(false);
+      return;
+    }
+
     try {
-      const r = await fetchRecommendations(parseFloat(vram), parseFloat(ram), priority);
-      setRecommendation(r);
-    } catch { /* ignore */ }
-    setLoading(false);
+      const r = await fetchRecommendations(parsedVram, parsedRam, priority);
+      const detailError = Array.isArray(r?.detail)
+        ? r.detail.map((d: any) => d?.msg || JSON.stringify(d)).join('; ')
+        : (typeof r?.detail === 'string' ? r.detail : '');
+      const apiError = typeof r?.error === 'string' ? r.error : detailError;
+      if (apiError) {
+        setRecommendation({ ...(r || {}), error: apiError });
+      } else {
+        setRecommendation(r);
+      }
+    } catch (err: any) {
+      setRecommendation({
+        error: err?.message || 'Failed to run analysis. Ensure backend is running on port 8000.',
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   const saveRouter = async () => {
@@ -105,8 +166,13 @@ export default function RightPanel({
   };
 
   const saveSettings = async () => {
-    const result = await updateAgentSettings(settings);
+    const parsedPaths = protectedPathsText
+      .split(/\r?\n/)
+      .map(p => p.trim())
+      .filter(Boolean);
+    const result = await updateAgentSettings({ ...settings, protected_paths: parsedPaths });
     setSettings(result);
+    setProtectedPathsText((result.protected_paths || parsedPaths).join('\n'));
     setSaved('settings');
     setTimeout(() => setSaved(''), 2000);
   };
@@ -114,10 +180,54 @@ export default function RightPanel({
   const saveTools = async () => {
     setToolSaving(true);
     await configureTools(Object.entries(toolConfig).filter(([_, enabled]) => enabled).map(([k]) => k));
-    localStorage.setItem('cortex-tools', JSON.stringify(toolConfig));
+    setToolRegistry(prev => prev.map(t => ({ ...t, enabled: !!toolConfig[t.key] })));
     setSaved('tools');
     setTimeout(() => setSaved(''), 2000);
     setToolSaving(false);
+  };
+
+  const savePreferences = async () => {
+    setPrefSaving(true);
+    try {
+      await Promise.all([
+        setPreference('default_project_path', prefProjectPath),
+        setPreference('default_mode', prefDefaultMode),
+      ]);
+      setSaved('prefs');
+      setTimeout(() => setSaved(''), 2000);
+    } finally {
+      setPrefSaving(false);
+    }
+  };
+
+  const refreshQueue = async () => {
+    setQueueLoading(true);
+    try {
+      const d = await fetchQueue();
+      setQueueTasks(d.tasks || []);
+    } finally {
+      setQueueLoading(false);
+    }
+  };
+
+  const addQueueTask = async () => {
+    const task = queueDraftTask.trim();
+    if (!task) return;
+    setQueueSaving(true);
+    try {
+      await enqueueTask(task, queueDraftMode, queueDraftPath.trim() || undefined);
+      setQueueDraftTask('');
+      await refreshQueue();
+      setSaved('queue');
+      setTimeout(() => setSaved(''), 2000);
+    } finally {
+      setQueueSaving(false);
+    }
+  };
+
+  const removeQueueTask = async (id: string) => {
+    await deleteQueueTask(id);
+    await refreshQueue();
   };
 
   const tokPercent = contextLimit > 0 ? Math.min((contextTokens / contextLimit) * 100, 100) : 0;
@@ -140,6 +250,9 @@ export default function RightPanel({
         </button>
         <button className={`lp-tab ${tab === 'tools' ? 'active' : ''}`} onClick={() => setTab('tools')} title="AI Tools">
           <Globe2 size={18} strokeWidth={tab === 'tools' ? 2.5 : 2} />
+        </button>
+        <button className={`lp-tab ${tab === 'queue' ? 'active' : ''}`} onClick={() => setTab('queue')} title="Queue">
+          <HardDrive size={18} strokeWidth={tab === 'queue' ? 2.5 : 2} />
         </button>
         <button className={`lp-tab ${tab === 'api' ? 'active' : ''}`} onClick={() => setTab('api')} title="API Reference">
           <Plug size={18} strokeWidth={tab === 'api' ? 2.5 : 2} />
@@ -189,21 +302,45 @@ export default function RightPanel({
         )}
 
         {tab === 'monitor' && (
-          <div className="pro-card">
-             <div className="card__label">Agent Activity</div>
-             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-                <div className={`status-ring ${isRunning ? 'status-ring--ok' : ''}`} style={{ background: isRunning ? 'var(--accent)' : 'var(--text-4)' }} />
-                <span style={{ fontSize: 13, fontWeight: 600 }}>{isRunning ? 'Processing Workspace' : 'Waiting for Input'}</span>
-             </div>
-             {featureHealth?.features && (
-               <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-3)', display: 'grid', gap: 4 }}>
-                 <div>Memory: {featureHealth.features.memory ? 'ok' : 'down'}</div>
-                 <div>Web Search: {featureHealth.features.web_search ? 'ok' : 'down'}</div>
-                 <div>Git: {featureHealth.features.git ? 'ok' : 'down'}</div>
-                 <div>Local Only: {featureHealth.features.local_only ? 'on' : 'off'}</div>
+          <>
+            <div className="pro-card">
+               <div className="card__label">Agent Activity</div>
+               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                  <div className={`status-ring ${isRunning ? 'status-ring--ok' : ''}`} style={{ background: isRunning ? 'var(--accent)' : 'var(--text-4)' }} />
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>{isRunning ? 'Processing Workspace' : 'Waiting for Input'}</span>
                </div>
-             )}
-          </div>
+               <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-3)' }}>
+                 Build progress: {doneFiles}/{totalFiles || 0} files
+               </div>
+               {featureHealth?.features && (
+                 <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-3)', display: 'grid', gap: 4 }}>
+                   <div>Memory: {featureHealth.features.memory ? 'ok' : 'down'}</div>
+                   <div>Web Search: {featureHealth.features.web_search ? 'ok' : 'down'}</div>
+                   <div>Git: {featureHealth.features.git ? 'ok' : 'down'}</div>
+                   <div>Local Only: {featureHealth.features.local_only ? 'on' : 'off'}</div>
+                   <div>Queue: {featureHealth.features.queue ? 'ok' : 'down'}</div>
+                 </div>
+               )}
+            </div>
+
+            <div className="pro-card">
+              <div className="card__label">Router Analytics</div>
+              <div style={{ marginTop: 8, display: 'grid', gap: 6, fontSize: 11, color: 'var(--text-3)' }}>
+                <div>Total decisions: {routerMetrics?.total ?? 0}</div>
+                <div>Avg confidence: {routerMetrics?.avg_confidence ?? 0}</div>
+                <div>Fallbacks: {routerMetrics?.fallbacks ?? 0}</div>
+                <div>Specialist hit-rate: {routerMetrics?.specialist_hit_rate ?? 0}%</div>
+                <div>Specialist latency: {routerMetrics?.avg_specialist_latency_ms ?? 0} ms</div>
+                <div>Specialist timeouts: {routerMetrics?.specialist_timeouts ?? 0}</div>
+                <div>Decompositions: {routerMetrics?.decompositions ?? 0}</div>
+                <div>Auto-escalations: {routerMetrics?.auto_escalations ?? 0}</div>
+                <div>Approval blocks: {routerMetrics?.approval_blocks ?? 0}</div>
+                <div>
+                  Feedback: up {routerMetrics?.quality_feedback?.up ?? 0} / down {routerMetrics?.quality_feedback?.down ?? 0}
+                </div>
+              </div>
+            </div>
+          </>
         )}
 
         {tab === 'advisor' && (
@@ -220,14 +357,53 @@ export default function RightPanel({
                     <input type="number" className="lp-search" value={ram} onChange={e => setRam(e.target.value)} style={{ padding: 4 }} />
                   </div>
                </div>
-               <button className="btn--primary btn--sm" style={{ width: '100%', marginTop: 12 }} onClick={doRecommend}>Run Analysis</button>
+               <button className="btn--primary btn--sm" style={{ width: '100%', marginTop: 12 }} onClick={doRecommend} disabled={loading}>
+                 {loading ? 'Running...' : 'Run Analysis'}
+               </button>
+               {loading && (
+                 <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-4)' }}>
+                   Running recommendation analysis...
+                 </div>
+               )}
             </div>
+            {recommendation?.error && (
+              <div className="pro-card" style={{ borderColor: 'rgba(255, 120, 120, 0.45)' }}>
+                <div className="card__label">Recommendation Error</div>
+                <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 6 }}>{String(recommendation.error)}</div>
+              </div>
+            )}
+            {recommendation?.data_sources && (
+              <div className="pro-card">
+                <div className="card__label">Recommendation Sources</div>
+                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6, display: 'grid', gap: 4 }}>
+                  <div>Engine: {recommendation.data_sources.engine || 'n/a'}</div>
+                  <div>Model database: {recommendation.data_sources.model_database || 'n/a'}</div>
+                  <div>Scoring: {recommendation.data_sources.scoring || 'n/a'}</div>
+                  <div>Binary: {recommendation.data_sources.binary || recommendation.llmfit_binary || 'not found'}</div>
+                </div>
+              </div>
+            )}
             {recommendation?.models?.map((m: any, i: number) => (
               <div className="pro-card" key={i}>
                  <div className="pro-head"><span className="pro-name">{m.model}</span><span className="pro-badge">{m.rank}</span></div>
                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>{m.specialty}</div>
+                 <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6, display: 'grid', gap: 2 }}>
+                   <div>Quality score: {m.quality_score ?? m.humaneval ?? '--'}</div>
+                   <div>VRAM runtime: {m.runtime_vram_gb ?? '--'} GB · {m.fits_vram ? 'fits VRAM' : (m.needs_ram_offload ? 'RAM offload' : 'too large')}</div>
+                   <div>Benchmark source: {m.benchmark_source || 'unknown'}</div>
+                 </div>
               </div>
             ))}
+            {recommendation && !recommendation?.error && Array.isArray(recommendation?.models) && recommendation.models.length === 0 && (
+              <div className="pro-card">
+                <div className="card__label">No Recommendations</div>
+                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
+                  Analysis completed but returned no models for the provided hardware constraints.
+                </div>
+              </div>
+            )}
+            <HardwareDashboard />
+            <ModelPicker />
           </>
         )}
 
@@ -238,7 +414,11 @@ export default function RightPanel({
                  <div className="setting-box">
                    <div className="setting-row">
                       <span className="setting-label">Self-Heal Loop</span>
-                      <input type="number" className="setting-input" value={settings.self_heal_count} onChange={e => setSettings({...settings, self_heal_count: parseInt(e.target.value)})} />
+                      <input type="number" className="setting-input" value={settings.self_heal_count} onChange={e => setSettings({...settings, self_heal_count: Number(e.target.value) || 0})} />
+                   </div>
+                   <div className="setting-row">
+                     <span className="setting-label">Context Limit</span>
+                     <input type="number" className="setting-input" value={settings.context_limit} onChange={e => setSettings({...settings, context_limit: Number(e.target.value) || 0})} />
                    </div>
                    <div className="setting-row">
                      <span className="setting-label">Local-only Mode</span>
@@ -248,9 +428,46 @@ export default function RightPanel({
                       onChange={e => setSettings({ ...settings, local_only: e.target.checked })}
                      />
                    </div>
+                   <div style={{ marginTop: 10 }}>
+                     <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-3)', marginBottom: 4 }}>Protected Paths (one per line)</div>
+                     <textarea
+                       className="setting-textarea"
+                       value={protectedPathsText}
+                       onChange={e => setProtectedPathsText(e.target.value)}
+                       placeholder="F:/Cortex/server\nF:/Cortex/dashboard"
+                     />
+                   </div>
                  </div>
                  <button className="btn--primary btn--sm" style={{ width: '100%', marginTop: 12 }} onClick={saveSettings}>{saved === 'settings' ? 'Saved' : 'Keep Changes'}</button>
               </div>
+
+              <div className="pro-card">
+                <div className="card__label">Workspace Preferences</div>
+                <div className="setting-box">
+                  <div className="setting-row">
+                    <span className="setting-label">Default Mode</span>
+                    <select className="setting-select" value={prefDefaultMode} onChange={e => setPrefDefaultMode(e.target.value)}>
+                      <option value="chat">chat</option>
+                      <option value="build">build</option>
+                      <option value="refactor">refactor</option>
+                    </select>
+                  </div>
+                  <div className="setting-row" style={{ alignItems: 'flex-start' }}>
+                    <span className="setting-label">Default Project</span>
+                    <input
+                      className="setting-input"
+                      style={{ textAlign: 'left' }}
+                      value={prefProjectPath}
+                      onChange={e => setPrefProjectPath(e.target.value)}
+                      placeholder="F:/Cortex"
+                    />
+                  </div>
+                </div>
+                <button className="btn--primary btn--sm" style={{ width: '100%', marginTop: 12 }} onClick={savePreferences}>
+                  {prefSaving ? 'Saving...' : saved === 'prefs' ? 'Saved' : 'Save Preferences'}
+                </button>
+              </div>
+
               <div className="pro-card">
                  <div className="card__label">Routing Map</div>
                  <div className="setting-box">
@@ -271,10 +488,14 @@ export default function RightPanel({
         {tab === 'tools' && (
           <div className="pro-card">
             <div className="card__label">AI Tools</div>
-            {['web_search', 'rag_index', 'code_review', 'telemetry'].map(t => (
-              <label key={t} className="tool-toggle">
-                <input type="checkbox" checked={toolConfig[t]} onChange={e => setToolConfig(prev => ({ ...prev, [t]: e.target.checked }))} />
-                <div className="tool-label">{t.replace('_', ' ')}</div>
+            {toolRegistry.length === 0 && <div style={{ fontSize: 11, color: 'var(--text-4)' }}>No tools discovered.</div>}
+            {toolRegistry.map(t => (
+              <label key={t.key} className="tool-toggle">
+                <input type="checkbox" checked={!!toolConfig[t.key]} onChange={e => setToolConfig(prev => ({ ...prev, [t.key]: e.target.checked }))} />
+                <div>
+                  <div className="tool-label">{t.name}</div>
+                  <div className="tool-desc">{t.key}</div>
+                </div>
               </label>
             ))}
             <button className="btn--primary" onClick={saveTools} disabled={toolSaving}>{toolSaving ? 'Saving…' : 'Apply Tools'}</button>
@@ -286,8 +507,69 @@ export default function RightPanel({
           </div>
         )}
 
-        {tab === 'api' && (
-           <div className="lp-scrollable">
+        {tab === 'queue' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div className="pro-card">
+              <div className="card__label">Task Queue</div>
+              <div className="setting-box">
+                <div className="setting-row" style={{ alignItems: 'flex-start' }}>
+                  <span className="setting-label">Task</span>
+                  <textarea
+                    className="setting-textarea"
+                    value={queueDraftTask}
+                    onChange={e => setQueueDraftTask(e.target.value)}
+                    placeholder="Describe the task to queue"
+                  />
+                </div>
+                <div className="setting-row">
+                  <span className="setting-label">Mode</span>
+                  <select className="setting-select" value={queueDraftMode} onChange={e => setQueueDraftMode(e.target.value)}>
+                    <option value="chat">chat</option>
+                    <option value="build">build</option>
+                    <option value="refactor">refactor</option>
+                  </select>
+                </div>
+                <div className="setting-row">
+                  <span className="setting-label">Project Path</span>
+                  <input
+                    className="setting-input"
+                    style={{ textAlign: 'left' }}
+                    value={queueDraftPath}
+                    onChange={e => setQueueDraftPath(e.target.value)}
+                    placeholder="Optional"
+                  />
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                <button className="btn--primary btn--sm" style={{ flex: 1 }} onClick={addQueueTask} disabled={queueSaving || !queueDraftTask.trim()}>
+                  {queueSaving ? 'Queueing...' : 'Add Task'}
+                </button>
+                <button className="btn--sm" style={{ flex: 1 }} onClick={refreshQueue}>
+                  Refresh
+                </button>
+              </div>
+            </div>
+
+            <div className="pro-card">
+              <div className="card__label">Pending Tasks</div>
+              {queueLoading && <div style={{ fontSize: 11, color: 'var(--text-4)' }}>Loading queue...</div>}
+              {!queueLoading && queueTasks.length === 0 && <div style={{ fontSize: 11, color: 'var(--text-4)' }}>No queued tasks.</div>}
+              {!queueLoading && queueTasks.map(task => (
+                <div key={task.id} className="queue-item">
+                  <div style={{ minWidth: 0 }}>
+                    <div className="queue-item__title">{task.task}</div>
+                    <div className="queue-item__meta">{task.mode} • {task.status}</div>
+                  </div>
+                  <button className="queue-item__delete" onClick={() => removeQueueTask(task.id)}>Remove</button>
+                </div>
+              ))}
+              {saved === 'queue' && <div style={{ marginTop: 8, fontSize: 11, color: 'var(--green)' }}>Task queued.</div>}
+            </div>
+          </div>
+        )}
+
+          {tab === 'api' && (
+            <div className="rp-section">
               {API_ENDPOINTS.map((ep, i) => (
                 <div key={i} className="api-row" style={{ padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -301,7 +583,7 @@ export default function RightPanel({
         )}
 
         {tab === 'outline' && (
-          <div className="lp-scrollable">
+          <div className="rp-section">
             <CodeOutline 
                code={activeFile?.content || ''} 
                language={activeFile?.path?.split('.').pop() || 'plaintext'} 

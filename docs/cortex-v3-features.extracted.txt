@@ -1,0 +1,623 @@
+﻿       
+                                                 CORTEX  
+               v3 Feature Design Document  
+            Cloud models · Multi-environment continuity · Graph memory · LM Studio parity · Plugin system  
+       
+                                          This document covers five major feature sets proposed for Cortex v3. Each section includes: the user problem being solved, the full implementation design, the data model, the UI changes, and the exact files to create or modify.  
+       
+            1.  Cloud Model Integration (Ollama Cloud + OpenRouter)  
+            2.  Multi-Environment Continuity (VS Code → Claude Code → Cortex → OpenClaw)  
+            3.  Graph Memory Checkpoints (Obsidian-compatible save and restore)  
+            4.  LM Studio Feature Parity (Model manager, server, benchmarks)  
+            5.  Agent, Skill & Plugin System (Claude Code-style extensibility)  
+            6.  Implementation Roadmap  
+    
+                  1.  Cloud Model Integration  
+            Ollama now supports cloud-hosted models that run on Ollama's infrastructure but are accessed via the same local API. Users with an Ollama account get a free-tier quota of cloud model calls. Cortex should surface these models seamlessly alongside local models — with no UX difference except a 'cloud' badge and a quota indicator.  
+    
+               1.1  How Ollama Cloud Models Work  
+            Ollama cloud models use the same Ollama API endpoint (localhost:11434) as local models. The difference is in the model tag — cloud models are tagged with :cloud or a similar suffix. Ollama routes them to their cloud backend transparently. From Cortex's perspective, they are just another model in the installed list.  
+    
+                                             # Cloud models appear in GET /api/tags exactly like local models:  
+            # {  
+            #   'name': 'glm-4:cloud',  
+            #   'size': 0,              <- 0 bytes: runs in cloud, not local  
+            #   'details': {'family': 'glm', 'hosted': 'cloud'}  
+            # }  
+              
+            # Detection: model is cloud-hosted if size == 0 OR 'cloud' in name  
+            def is_cloud_model(model: dict) -> bool:  
+                return model.get('size', 1) == 0 or ':cloud' in model['name']  
+       
+               1.2  Cloud Model Discovery and Display  
+                   Model picker badge:           Cloud models show a cloud icon and 'Cloud' badge alongside local models in the model roster. No separate UI — same list, different badge.  
+                   Quota indicator:           For Ollama cloud models, fetch the user's remaining free quota from the Ollama account API and display it next to the model name: 'glm-4:cloud  [47 / 100 calls remaining today]'.  
+                   VRAM impact:           Cloud models use 0 local VRAM. The VRAM selector treats them as always-available and gives them the lowest priority by default — local models are preferred to avoid quota consumption. User can pin a cloud model as primary for a role.  
+                   Automatic fallback:           If no local model fits in VRAM AND cloud is enabled, the selector falls back to the cloud model automatically. A yellow banner informs the user that cloud quota is being used.  
+    
+               1.3  OpenRouter Integration  
+            OpenRouter provides access to GPT-4o, Claude Sonnet, Gemini Pro, and 100+ other models via an OpenAI-compatible API. Users provide their own API key. Cortex treats OpenRouter models as a separate tier — shown in the model picker with provider name, cost, and context window.  
+    
+                                                Model  
+                             Provider  
+                             Context  
+                             Cost/1M tokens  
+                             Free tier  
+                             glm-4:cloud  
+                           Ollama Cloud  
+                           128k  
+                           Free (quota)  
+                           100 calls/day  
+                             qwen-max:cloud  
+                           Ollama Cloud  
+                           32k  
+                           Free (quota)  
+                           50k tokens/day  
+                             gpt-4o  
+                           OpenRouter  
+                           128k  
+                           $5 in / $15 out  
+                           No  
+                             claude-sonnet-4-5  
+                           OpenRouter  
+                           200k  
+                           $3 in / $15 out  
+                           No  
+                             gemini-1.5-pro  
+                           OpenRouter  
+                           1M  
+                           $1.25 in / $5 out  
+                           Limited  
+                             meta-llama/llama-3.1  
+                           OpenRouter  
+                           128k  
+                           $0.18 in / $0.18 out  
+                           No  
+       
+               1.4  Implementation  
+                                             # server/config/cloud.py  
+              
+            CLOUD_PROVIDERS = {  
+                'ollama_cloud': {  
+                    'base_url': 'http://localhost:11434/v1',  # same as local  
+                    'auth': None,                             # uses Ollama session  
+                    'quota_endpoint': 'https://ollama.ai/api/account/quota',  
+                },  
+                'openrouter': {  
+                    'base_url': 'https://openrouter.ai/api/v1',  
+                    'auth_header': 'Authorization',  
+                    'auth_prefix': 'Bearer',  
+                    'key_env': 'OPENROUTER_API_KEY',  
+                },  
+            }  
+              
+            async def fetch_all_models() -> list[dict]:  
+                """Merge local Ollama models + cloud models into one unified list."""  
+                local   = await fetch_ollama_models()          # existing skill  
+                cloud   = await fetch_cloud_models('ollama_cloud')  
+                router  = await fetch_openrouter_models()      # if key configured  
+              
+                # Tag each model with its source  
+                for m in local:  m['source'] = 'local';  m['vram_gb'] = m['size_bytes']/1e9*1.15  
+                for m in cloud:  m['source'] = 'cloud';  m['vram_gb'] = 0  
+                for m in router: m['source'] = 'openrouter'; m['vram_gb'] = 0  
+              
+                return local + cloud + router  
+       
+                  2.  Multi-Environment Continuity  
+            A developer should be able to start a coding session in VS Code, hand it off to Claude Code, continue it in Cortex, then pick it up in OpenClaw — without losing any context, file state, conversation history, or agent progress. This is the 'universal handoff' feature.  
+    
+               2.1  The Problem  
+            Today, every tool is an island. VS Code knows what files are open. Claude Code knows the conversation. Cortex knows the agent session. OpenClaw knows its own state. When a developer switches tools, they lose all of this and must re-establish context manually — often by re-explaining everything from scratch.  
+    
+               2.2  The Cortex Environment Protocol (CEP)  
+            Cortex defines a lightweight JSON protocol that any tool can implement to participate in environment handoffs. A CEP packet is a portable snapshot of everything needed to continue a coding session:  
+    
+                                             # The Cortex Environment Packet (CEP) — full schema  
+            {  
+              'version': '1.0',  
+              'session_id': str,  
+              'project': {  
+                'path': str,              # absolute path to project root  
+                'git_branch': str,  
+                'git_stash': str | None,  # stash ref if there are uncommitted changes  
+                'open_files': [           # currently open in the source editor  
+                  {'path': str, 'cursor_line': int, 'cursor_col': int, 'is_modified': bool}  
+                ],  
+                'breakpoints': [{'file': str, 'line': int}],  # debug breakpoints if any  
+              },  
+              'conversation': {  
+                'messages': [{'role': str, 'content': str, 'ts': str}],  
+                'active_task': str,         # what the user is currently trying to do  
+                'recent_decisions': [str],  # last 5 significant decisions made  
+              },  
+              'agent': {  
+                'phase': str,               # 'idle' | 'planning' | 'coding' | 'healing'  
+                'plan': dict | None,        # architect plan if a build was in progress  
+                'files_written': [str],     # files already written in current session  
+                'files_remaining': [str],   # files still to be written  
+                'specialist_context': {     # per-domain working memory  
+                  'frontend': str,  
+                  'backend': str,  
+                }  
+              },  
+              'environment': {  
+                'source_tool': str,         # 'vscode' | 'claude_code' | 'cortex' | 'openclaw'  
+                'target_tool': str,  
+                'timestamp': str,  
+                'cortex_url': str,          # http://localhost:8000 — target can call back  
+              }  
+            }  
+       
+               2.3  Environment Adapters  
+    
+                                                 VS Code  
+                                VS Code adapter                         file watcher + settings sync + extension  
+                   Mechanism:           Cortex VS Code extension watches .vscode/cortex-sync.json. When the file changes (written by Cortex on handoff), the extension reads the CEP packet and: opens the listed files, moves cursors to saved positions, opens the integrated terminal if a command was running.  
+                   Sending to Cortex:           Extension reads currently open tabs, cursor positions, and git status. Calls POST /environments/receive with the CEP packet. Cortex restores the session in the dashboard.  
+                   Install:           ext install cortex-ai.cortex-vscode  
+       
+                                                 Claude Code  
+                                Claude Code adapter                         MCP tool integration  
+                   Mechanism:           Cortex runs as an MCP server. Claude Code calls the cortex_receive_session MCP tool with a CEP packet when handing off. Claude Code calls cortex_send_session when receiving. Session context is injected into Claude Code's system prompt automatically.  
+                   MCP tools exposed:           cortex_send_session           ·           cortex_receive_session           ·           cortex_get_checkpoint           ·           cortex_list_checkpoints  
+                   Config:           Add to ~/.config/claude-code/mcp.json: {"cortex": {"command": "cortex-mcp", "args": ["--port", "8000"]}}  
+       
+                                                 OpenClaw  
+                                OpenClaw adapter                         REST API polling  
+                   Mechanism:           OpenClaw polls GET /environments/latest every 30 seconds. When Cortex pushes a handoff, OpenClaw detects the new packet and prompts: 'Cortex has a session ready to continue here. Restore?' One-click accept.  
+                   Send:           OpenClaw calls POST /environments/receive with its own CEP packet when the user initiates a handoff from OpenClaw to Cortex.  
+                   Note:           OpenClaw support requires OpenClaw to implement the CEP protocol on their side. Cortex will publish the open specification for any tool to adopt.  
+       
+               2.4  The Handoff Flow (User Perspective)  
+                 Developer is working in VS Code with files open and an active chat in Cortex dashboard  
+                 Wants to continue in Claude Code. Clicks 'Hand off to Claude Code' in Cortex's environment switcher  
+                 Cortex creates a CEP packet with current session state  
+                 Writes packet to .vscode/cortex-sync.json (for VS Code extension) AND posts to MCP server  
+                 Claude Code picks up the MCP tool call, injects session context into its system prompt  
+                 Developer opens Claude Code — it shows 'Continuing from Cortex: Add JWT auth module'  
+                 Developer works in Claude Code. When they want to return to Cortex, Claude Code calls cortex_send_session  
+                 Cortex dashboard shows a blue banner: 'Claude Code has work ready to sync' — one click to restore  
+    
+               2.5  Implementation  
+                                             # server/api/environments.py  
+              
+            from fastapi import APIRouter  
+            from pydantic import BaseModel  
+            import aiosqlite, json  
+              
+            router = APIRouter(prefix='/environments', tags=['environments'])  
+              
+            class CEPPacket(BaseModel):  
+                version: str = '1.0'  
+                session_id: str  
+                project: dict  
+                conversation: dict  
+                agent: dict  
+                environment: dict  
+              
+            @router.post('/receive')  
+            async def receive_handoff(packet: CEPPacket):  
+                """Accept a CEP packet from another tool. Restore the session."""  
+                async with aiosqlite.connect(DB_PATH) as db:  
+                    await db.execute(  
+                        'INSERT OR REPLACE INTO env_handoffs VALUES (?,?,?,?)',  
+                        (packet.session_id, packet.environment['source_tool'],  
+                         json.dumps(packet.dict()), datetime.utcnow().isoformat())  
+                    )  
+                # Stream a notification to the dashboard  
+                await broadcast_event({'type':'env_handoff_received',  
+                                       'source': packet.environment['source_tool'],  
+                                       'task': packet.conversation['active_task']})  
+                return {'status': 'received', 'session_id': packet.session_id}  
+              
+            @router.get('/latest')  
+            async def latest_handoff():  
+                """OpenClaw polls this. Returns the most recent unaccepted handoff."""  
+                async with aiosqlite.connect(DB_PATH) as db:  
+                    row = await db.execute_fetchall(  
+                        'SELECT packet FROM env_handoffs WHERE accepted=0 ORDER BY ts DESC LIMIT 1'  
+                    )  
+                return json.loads(row[0][0]) if row else None  
+              
+            @router.post('/push')  
+            async def push_to_tool(target: str, session_id: str):  
+                """User initiates handoff. Build CEP packet and push to target tool."""  
+                packet = await build_cep_packet(session_id, target)  
+                return await send_to_target(target, packet)  
+       
+                  3.  Graph Memory Checkpoints  
+            Checkpoints let users save the complete state of a Cortex session — the conversation, the agent's progress, the files written, and the decisions made — and restore it exactly later, even after a server restart or in a different environment. Stored in Obsidian-compatible Markdown for human-readability and long-term portability.  
+    
+               3.1  Why Graph Memory, Not a Database  
+            A relational database stores structured records. A graph memory stores interconnected knowledge nodes — each checkpoint links to related checkpoints, to the memory entries created during the session, and to the project's knowledge graph. This means restoring a checkpoint also restores the full web of context, not just the isolated session state.  
+            The graph structure means: 'Continue from checkpoint A, but incorporate what you learned in checkpoint B' is possible. The agent can traverse links between checkpoints to synthesise cross-session knowledge.  
+    
+               3.2  Storage Format — Obsidian-Compatible Markdown  
+            Every checkpoint is a Markdown file in .cortex/memory/. Obsidian users can open this folder as a vault and see their entire Cortex history as an interconnected knowledge graph. Non-Obsidian users can read the files directly — they are plain Markdown.  
+    
+                                             # .cortex/memory/2026-03-21-auth-module-checkpoint.md  
+              
+            ---  
+            id: abc123xyz  
+            label: 'Auth module — before refactor'  
+            timestamp: 2026-03-21T15:30:00Z  
+            session_id: sess_789  
+            project: /Users/taitil/projects/my-app  
+            phase: coding  
+            tags: [checkpoint, auth, backend, jwt]  
+            links:  
+              - def456uvw  # previous checkpoint: initial project setup  
+              - ghi789abc  # memory: JWT implementation decision  
+            specialist_context:  
+              backend: 'Implementing JWT with python-jose. refresh_token in httponly cookie.'  
+              frontend: 'Auth context using Zustand. Token stored in memory, not localStorage.'  
+            files_written:  
+              - server/api/auth.py  
+              - server/models/user.py  
+              - dashboard/app/lib/auth-store.ts  
+            files_remaining:  
+              - dashboard/app/components/LoginForm.tsx  
+              - dashboard/app/components/ProtectedRoute.tsx  
+            ---  
+              
+            # Checkpoint: Auth module — before refactor  
+              
+            ## What was being worked on  
+            Implementing JWT authentication with refresh token rotation.  
+            User model: {id: UUID, email: str, role: Literal['user', 'admin']}  
+            Access token: 30 min expiry. Refresh token: 7 days, httponly cookie.  
+              
+            ## Key decisions made  
+            - Using python-jose for JWT (not PyJWT — better typing support in v3)  
+            - Storing refresh token as httponly cookie to prevent XSS  
+            - Frontend auth state in Zustand store, token in memory (not localStorage)  
+              
+            ## Conversation summary  
+            User asked to add role-based access control after the basic auth was done.  
+            Decided to use a 'role' field on the User model rather than a separate roles table.  
+              
+            ## Next steps (what was planned when checkpoint was saved)  
+            1. Write LoginForm.tsx with email/password inputs and error states  
+            2. Write ProtectedRoute.tsx that checks Zustand auth state  
+            3. Add role middleware to the admin endpoints in server/api/admin.py  
+              
+            [[def456uvw|Previous checkpoint: project setup]]  
+            [[ghi789abc|Memory: JWT implementation decision]]  
+       
+               3.3  Checkpoint Creation  
+                   Manual save:           User clicks 'Save checkpoint' button or types /checkpoint in the command bar. Prompted for a label, then checkpoint is created immediately.  
+                   Auto-save triggers:           After every successful file write (optional), after each architect plan, before every self-healing loop patch, and before any environment handoff.  
+                   Git integration:           Checkpoint creation optionally runs git stash with the checkpoint ID as the stash message. This means the checkpoint can restore not just the Cortex session but also the exact uncommitted code state.  
+    
+               3.4  Checkpoint Restoration  
+                 User opens the Checkpoint Panel in the right sidebar  
+                 Sees a timeline of checkpoints for the current project, with labels, timestamps, and phase indicators  
+                 Clicks a checkpoint — previews what will be restored (conversation summary, files written, phase)  
+                 Clicks 'Restore' — Cortex loads the checkpoint's session data into the dashboard  
+                 If the checkpoint has a git stash: 'This checkpoint has code changes saved. Apply stash?' — optional  
+                 Conversation history is restored. Agent context is restored. The user can continue as if they never left  
+    
+               3.5  Graphify / Obsidian Integration  
+                   Obsidian vault:           Point Obsidian at .cortex/memory/ as a vault. All checkpoints and memory nodes appear as linked notes. [[Double bracket]] links become clickable connections in the graph view.  
+                   Auto-backlinks:           When a new checkpoint links to an old one, Obsidian's graph view shows the connection automatically. No manual wikilink management needed.  
+                   Graphify plugin:           If the user has the Graphify Obsidian plugin installed, Cortex can write richer graph metadata to the frontmatter that Graphify uses to build enhanced visualisations.  
+                   Token efficiency:           Instead of loading the entire conversation history into every new session (expensive), the agent loads only the graph-linked memory nodes relevant to the current task — typically 3-5 nodes of ~200 tokens each instead of 50+ messages of 5000+ tokens.  
+    
+                  4.  LM Studio Feature Parity  
+            LM Studio is a popular GUI for running local models. It offers features that Cortex should match or exceed since Cortex's target user is the same — a developer who wants to run local LLMs without being a ML engineer. The goal is not to replace LM Studio but to make Cortex self-sufficient for users who currently use both.  
+    
+               4.1  Feature Gap Analysis  
+                                              LM Studio feature  
+                             Cortex currently  
+                             v3 target  
+                             Model browser (search + download HuggingFace)  
+                           Not present  
+                           Built-in model browser + one-click install via Ollama pull  
+                             Local inference server (OpenAI-compatible)  
+                           Yes — port 8000  
+                           Enhance: add full OpenAI compat including /v1/embeddings  
+                             Model benchmarks (compare models side by side)  
+                           Advisor tab only  
+                           Dedicated benchmark runner: same prompt → N models → compare output  
+                             Hardware stats (VRAM, CPU, RAM live monitor)  
+                           VRAM selector only  
+                           Live hardware dashboard: GPU utilisation, VRAM, RAM, temp, tok/s  
+                             Model settings (temp, top_p, context per model)  
+                           config/pools.py  
+                           Per-model settings UI: sliders for each generation parameter  
+                             Conversation logs (save, export)  
+                           Session history  
+                           Already done — enhance export format  
+                             Prompt presets (save/load prompt configs)  
+                           Template library  
+                           Already planned — surface in UI  
+                             Multi-model chat (compare responses)  
+                           Not present  
+                           Split view: same prompt sent to 2 models simultaneously  
+                             Model info (parameters, quantization, family)  
+                           Advisor tab  
+                           Rich model card with all metadata from Ollama API  
+                             GGUF model loading  
+                           Via Ollama  
+                           Model browser points to GGUF sources, loads via Ollama  
+       
+               4.2  Model Browser  
+            A searchable catalogue of models available through Ollama's registry. Users can search, filter by size and task, read model cards, and install with one click — without leaving Cortex.  
+    
+                                                 Browser  
+                                Model browser                         search · filter · install · model cards  
+                   Data source:           Ollama's public model registry (registry.ollama.ai). Cache refreshed hourly. Shows: model name, family, parameter count, quantisation options, file size per quant, tags, recommended hardware.  
+                   Filters:           Task type (code / chat / reasoning / vision / embedding), parameter count (<7B / 7B / 14B / 32B+), fits-in-my-VRAM toggle (uses current free VRAM), installed-only toggle.  
+                   One-click install:           Calls ollama pull {model} as a streaming subprocess. Progress bar shows download %. Installed models appear in the specialist pool roster immediately.  
+                   Model card:           Shows: architecture, training data (if disclosed), benchmark scores (from MODEL_BENCHMARKS), licence, recommended use cases, and community ratings if Ollama exposes them.  
+       
+               4.3  Multi-Model Comparison Chat  
+            Send the same prompt to two or three models simultaneously and compare their responses side by side. Each pane shows the model name, response time, token count, and the generated text. Click a pane to select that model as the active one for the conversation.  
+    
+                                             # server: POST /agent/compare  
+            {  
+              'prompt': str,  
+              'models': list[str],     # 2-3 model names  
+              'mode': 'chat' | 'code', # affects system prompt  
+            }  
+              
+            # Runs all models in parallel via asyncio.gather()  
+            # Streams results per model: {'model': str, 'delta': str, 'done': bool}  
+            # Frontend shows N side-by-side panels, each streaming independently  
+       
+               4.4  Live Hardware Dashboard  
+            A live hardware monitor panel showing GPU utilisation, VRAM usage (used / total), system RAM, CPU load, and current inference speed (tokens/second). Updates every 2 seconds. Shows which model is currently loaded.  
+                   GPU stats:           nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader --loop=2  
+                   CPU/RAM:           Python psutil library — cross-platform, works on Windows, macOS, Linux.  
+                   Inference speed:           Tracked from SSE event timestamps — tokens received / time elapsed = tok/s displayed live during generation.  
+                   Streaming endpoint:           GET /hardware/stats as SSE stream — frontend subscribes and updates the panel in real time.  
+    
+                  5.  Agent, Skill & Plugin System  
+            Cortex should be extensible the same way Claude Code is — users can define custom agents, add reusable skills, and install third-party plugins. Every customisation is a file in .cortex/ — no configuration UI required, though one is provided for discoverability.  
+    
+               5.1  Custom Agents  
+            Users define custom agents as Python files in .cortex/agents/. A custom agent has a name, a model pool, a system prompt template, and optionally a classifier function that determines when it should be auto-invoked.  
+    
+                                             # .cortex/agents/security_auditor.py  
+              
+            AGENT_METADATA = {  
+                'name': 'security_auditor',  
+                'description': 'Audits code for OWASP Top 10 vulnerabilities',  
+                'version': '1.0.0',  
+                'model_pool': ['deepseek-r1:7b', 'llama3.1:8b'],  
+                'trigger': 'manual | post_build',  # when to auto-run  
+                'invoke_command': '/security',  
+            }  
+              
+            SYSTEM_PROMPT = '''  
+            You are a security engineer specialising in web application security.  
+            Audit the provided code for OWASP Top 10 vulnerabilities.  
+            Output a structured report: {vulnerability_class, severity, file, line, description, fix}.  
+            Be specific — cite the exact code pattern that is vulnerable.  
+            '''  
+              
+            async def classify(path: str, description: str) -> bool:  
+                """Return True if this agent should handle this file type."""  
+                # Security auditor is interested in all server-side files  
+                return any(seg in path for seg in ['api', 'auth', 'routes', 'server'])  
+              
+            async def run(context: AgentContext) -> AsyncGenerator[dict, None]:  
+                # Standard agent interface — yield SSE events  
+                model = await select_model(AGENT_METADATA['model_pool'])  
+                async for event in generate_streaming(model, SYSTEM_PROMPT, context.task):  
+                    yield event  
+       
+               5.2  Custom Skills  
+            Skills are atomic tools agents can invoke. Users define custom skills in .cortex/skills/ — Python files with a standard interface. Cortex auto-discovers them at startup.  
+    
+                                             # .cortex/skills/notify_slack.py  
+            # Posts a message to a Slack channel when a build completes  
+              
+            import httpx  
+            from server.agents.skill_runner import SkillContext, SkillResult  
+              
+            SKILL_METADATA = {  
+                'name': 'notify_slack',  
+                'description': 'Post a build completion notification to Slack',  
+                'trigger': 'on build complete',  
+                'input_schema': {  
+                    'message': 'str — the message to post',  
+                    'channel': 'str — Slack channel name, default #dev-builds',  
+                }  
+            }  
+              
+            async def run(context: SkillContext, message: str,  
+                          channel: str = '#dev-builds') -> SkillResult:  
+                webhook_url = context.env.get('SLACK_WEBHOOK_URL')  
+                if not webhook_url:  
+                    return SkillResult(success=False, error='SLACK_WEBHOOK_URL not set in .env')  
+              
+                async with httpx.AsyncClient() as client:  
+                    r = await client.post(webhook_url, json={'text': message, 'channel': channel})  
+              
+                return SkillResult(  
+                    success=r.status_code == 200,  
+                    output={'status_code': r.status_code},  
+                    events=[{'type':'log','phase':'skill','message':f'Slack notification sent to {channel}'}],  
+                    error=None if r.status_code==200 else r.text  
+                )  
+       
+               5.3  Plugins  
+            Plugins are more powerful than skills — they can add new API routes, new UI panels, new agent types, and new CLI commands. A plugin is a Python package in .cortex/plugins/ with a register() function.  
+    
+                                             # .cortex/plugins/github_pr_review/plugin.py  
+              
+            PLUGIN_METADATA = {  
+                'name': 'github_pr_review',  
+                'description': 'Automatically review GitHub PRs using Cortex agents',  
+                'version': '1.0.0',  
+                'author': 'community',  
+                'requires': ['GITHUB_TOKEN'],  
+            }  
+              
+            def register(app):  
+                """Mount this plugin's routes onto the FastAPI app."""  
+                from .routes import router  
+                app.include_router(router, prefix='/plugins/github_pr_review')  
+              
+            # .cortex/plugins/github_pr_review/routes.py  
+            from fastapi import APIRouter  
+            router = APIRouter()  
+              
+            @router.post('/review')  
+            async def review_pr(pr_url: str):  
+                # Fetch PR diff from GitHub API  
+                # Pass diff to the reviewer agent  
+                # Post review as a PR comment  
+                ...  
+       
+               5.4  Plugin Manager UI  
+            A dedicated Plugin Manager page in the dashboard (accessible from Settings → Plugins) showing:  
+                   Installed plugins:           Name, version, author, description, enabled/disabled toggle, configure button  
+                   Plugin store:           Curated list of community plugins from the Cortex plugin registry (a GitHub repo). Install with one click — downloads to .cortex/plugins/, restarts the plugin loader  
+                   Custom agents:           List of agents in .cortex/agents/ — enable/disable each, view their model pool and trigger conditions, test with a sample prompt  
+                   Custom skills:           List of skills in .cortex/skills/ — enable/disable, view last invocation time and success rate  
+                   Sandboxing:           Plugins run in a restricted Python environment — they cannot import from server/agents/ directly. They communicate via the REST API only. This prevents malicious plugins from accessing the model layer directly.  
+               5.5  The .cortex/ Directory Structure  
+                                             .cortex/  
+            ├── config.json          # Model routing, feature flags, preferences  
+            ├── memory/              # Graph memory nodes (Obsidian-compatible .md)  
+            │   ├── 2026-03-21-auth-checkpoint.md  
+            │   ├── 2026-03-20-project-setup.md  
+            │   └── knowledge/       # Persistent project knowledge (not checkpoints)  
+            │       ├── tech-decisions.md  
+            │       └── api-conventions.md  
+            ├── agents/              # User-defined custom agents  
+            │   └── security_auditor.py  
+            ├── skills/              # User-defined custom skills  
+            │   └── notify_slack.py  
+            ├── plugins/             # Installed plugins (auto-discovered)  
+            │   └── github_pr_review/  
+            │       ├── plugin.py  
+            │       └── routes.py  
+            └── environments/        # Environment handoff packets (CEP)  
+                └── latest.json      # Most recent handoff packet  
+       
+                  6.  Implementation Roadmap  
+            Features are grouped by dependency. Each group can be built independently. Within groups, items are ordered by impact per effort.  
+    
+               Phase A — Foundation (Do First, Enables Everything Else)  
+                                          These are prerequisite infrastructure changes that every other v3 feature depends on. None of the five feature sets above work well without these.  
+       
+                                              Task  
+                             Files  
+                             Effort  
+                             SQLite persistence (replace in-memory state)  
+                           server/api/state.py → aiosqlite  
+                           1 day  
+                             .cortex/ directory structure + config.json loader  
+                           server/api/config.py (new)  
+                           3 hours  
+                             Plugin loader + sandbox at startup  
+                           server/api/plugins.py (new)  
+                           1 day  
+                             Skill runner + auto-discovery  
+                           server/agents/skill_runner.py (new)  
+                           4 hours  
+                             CEP packet schema (Pydantic model)  
+                           server/api/environments.py (new)  
+                           2 hours  
+       
+               Phase B — Cloud Models + LM Studio Parity  
+                                              Task  
+                             Files  
+                             Effort  
+                             Fetch cloud models from Ollama + OpenRouter  
+                           server/config/cloud.py (new)  
+                           4 hours  
+                             Unified model list (local + cloud + OpenRouter)  
+                           server/agents/vram_selector.py  
+                           3 hours  
+                             Cloud quota indicator in model picker UI  
+                           app/components/ModelPicker.tsx  
+                           3 hours  
+                             Live hardware stats SSE endpoint  
+                           server/main.py + psutil  
+                           4 hours  
+                             Hardware dashboard panel in UI  
+                           app/components/HardwareDashboard.tsx  
+                           1 day  
+                             Model browser (search + install)  
+                           server/api/model_browser.py + UI component  
+                           2 days  
+                             Multi-model comparison chat  
+                           server/main.py + app/components/CompareView.tsx  
+                           2 days  
+       
+               Phase C — Graph Memory + Checkpoints  
+                                              Task  
+                             Files  
+                             Effort  
+                             write_memory skill (Obsidian-format .md)  
+                           server/agents/skill_runner.py  
+                           4 hours  
+                             read_memory skill (frontmatter parse + embed search)  
+                           server/agents/skill_runner.py  
+                           4 hours  
+                             Checkpoint create + restore API  
+                           server/api/checkpoints.py (new)  
+                           1 day  
+                             Checkpoint panel in right sidebar  
+                           app/components/CheckpointPanel.tsx  
+                           1 day  
+                             Auto-checkpoint triggers (post-build, pre-patch)  
+                           server/agents/orchestrator.py  
+                           3 hours  
+                             Git stash integration at checkpoint creation  
+                           server/agents/skill_runner.py → git_snapshot  
+                           3 hours  
+       
+               Phase D — Multi-Environment Continuity  
+                                              Task  
+                             Files  
+                             Effort  
+                             CEP packet build function (current state → packet)  
+                           server/api/environments.py  
+                           4 hours  
+                             POST /environments/receive + restore logic  
+                           server/api/environments.py  
+                           4 hours  
+                             Environment switcher UI in dashboard  
+                           app/components/EnvironmentSwitcher.tsx  
+                           1 day  
+                             VS Code extension (file watcher + tab restore)  
+                           vscode-cortex/ (new package)  
+                           1 week  
+                             MCP server for Claude Code integration  
+                           server/mcp_server.py  
+                           2 days  
+                             OpenClaw REST polling adapter  
+                           server/api/environments.py  
+                           1 day  
+       
+               Phase E — Agent/Skill/Plugin System UI  
+                                              Task  
+                             Files  
+                             Effort  
+                             Custom agent auto-discovery from .cortex/agents/  
+                           server/api/plugins.py  
+                           3 hours  
+                             Custom skill auto-discovery from .cortex/skills/  
+                           server/agents/skill_runner.py  
+                           2 hours  
+                             Plugin Manager page  
+                           app/app/plugins/page.tsx (new route)  
+                           2 days  
+                             Plugin store (fetch from GitHub registry)  
+                           server/api/plugin_store.py (new)  
+                           1 day  
+                             Per-agent enable/disable + test UI  
+                           app/components/PluginManager.tsx  
+                           1 day  
+                             Sandboxed plugin execution  
+                           server/api/plugins.py (restricted imports)  
+                           1 day  
+       
+                  Cortex v3 — The local AI workstation that works on every machine, in every environment.             github.com/Taitilchheda/Cortex  
+          

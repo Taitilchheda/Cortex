@@ -20,6 +20,13 @@ async def init_memory_db():
         """)
         # FTS5 for search
         await db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(key, value, content='memory', content_rowid='id')")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS specialist_memory (
+                role TEXT PRIMARY KEY,
+                summary TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            )
+        """)
         await db.commit()
 
 async def add_memory(key: str, value: str, source: str = "user"):
@@ -71,3 +78,55 @@ async def get_memory_context(task: str) -> str:
     for m in mems:
         ctx += f"- {m['key']}: {m['value']}\n"
     return ctx + "--- End Memory ---\n"
+
+
+async def upsert_specialist_memory(role: str, summary: str) -> None:
+    """Persist a compact per-role specialist summary for cross-session recall."""
+    role_name = (role or "").strip().lower()
+    text = (summary or "").strip()
+    if not role_name or not text:
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO specialist_memory (role, summary, updated_at)
+            VALUES (?, ?, strftime('%s','now'))
+            ON CONFLICT(role) DO UPDATE SET
+                summary = excluded.summary,
+                updated_at = excluded.updated_at
+            """,
+            (role_name, text[:3000]),
+        )
+        await db.commit()
+
+
+async def get_specialist_memory_context(roles: List[str], limit: int = 5) -> str:
+    """Return specialist memory snippets for the requested roles."""
+    wanted = [str(r).strip().lower() for r in roles if str(r).strip()]
+    wanted = list(dict.fromkeys(wanted))
+    if not wanted:
+        return ""
+
+    placeholders = ",".join(["?"] * len(wanted))
+    query = (
+        "SELECT role, summary, updated_at FROM specialist_memory "
+        f"WHERE role IN ({placeholders}) ORDER BY updated_at DESC LIMIT ?"
+    )
+
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            params = [*wanted, int(limit)]
+            async with db.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+    except Exception:
+        return ""
+
+    if not rows:
+        return ""
+
+    chunks = ["--- Specialist Memory (Persistent) ---"]
+    for row in rows:
+        chunks.append(f"- [{row['role']}] {row['summary']}")
+    chunks.append("--- End Specialist Memory ---")
+    return "\n".join(chunks) + "\n"

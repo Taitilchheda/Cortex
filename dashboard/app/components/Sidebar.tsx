@@ -14,13 +14,15 @@ import {
   ChevronDown, 
   FileCode, 
   Folder,
+  FolderOpen,
   MessageSquare,
   Zap,
   Hammer,
   Search,
   MoreVertical,
   X,
-  GitBranch
+  GitBranch,
+  RefreshCw
 } from 'lucide-react';
 import GitDashboard from './GitDashboard';
 
@@ -47,7 +49,12 @@ export default function Sidebar({
   const [searchLocal, setSearchLocal] = useState('');
   const [remoteSearchSessions, setRemoteSearchSessions] = useState<Session[] | null>(null);
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [fileExpanded, setFileExpanded] = useState<Set<string>>(new Set());
+  const [fileFilter, setFileFilter] = useState('');
+  const [fileRoot, setFileRoot] = useState('.');
+  const [isLoadingTree, setIsLoadingTree] = useState(false);
+  const [fileStats, setFileStats] = useState({ dirs: 0, files: 0 });
+  const [selectedFilePath, setSelectedFilePath] = useState('');
   const [router, setRouter] = useState<Record<string, string>>({});
   const [contextMenu, setContextMenu] = useState<{ type: 'session' | 'file'; id?: string; node?: FileNode; x: number; y: number } | null>(null);
 
@@ -91,6 +98,17 @@ export default function Sidebar({
 
   const grouped = useMemo(() => groupSessions(filteredSessions, pinnedIds, isSearching), [filteredSessions, pinnedIds, isSearching]);
 
+  const displayedTree = useMemo(() => {
+    const query = fileFilter.trim().toLowerCase();
+    if (!query) return fileTree;
+    return filterTree(fileTree, query);
+  }, [fileTree, fileFilter]);
+
+  useEffect(() => {
+    if (!fileFilter.trim()) return;
+    setFileExpanded(new Set(collectDirPaths(displayedTree)));
+  }, [fileFilter, displayedTree]);
+
   useEffect(() => {
     if (activeTab === 'files') {
       const root = typeof window !== 'undefined' ? localStorage.getItem('cortex-last-path') || '.' : '.';
@@ -98,17 +116,53 @@ export default function Sidebar({
     }
   }, [activeTab]);
 
+  useEffect(() => {
+    if (activeTab === 'files') {
+      setFileFilter((searchQuery || '').trim());
+    }
+  }, [searchQuery, activeTab]);
+
   const loadTree = async (path: string) => {
+    setIsLoadingTree(true);
     try {
       const resp = await fetchFileTree(path);
-      setFileTree(resp.tree || resp.files || []);
+      const tree = sortTree(resp.tree || resp.files || []);
+      setFileTree(tree);
+      setFileRoot(path);
+      setFileStats(computeTreeStats(tree));
+      const topDirs = new Set<string>();
+      for (const node of tree) {
+        if (node.is_dir) topDirs.add(node.path);
+      }
+      setFileExpanded(topDirs);
     } catch {
       setFileTree([]);
+      setFileStats({ dirs: 0, files: 0 });
+    } finally {
+      setIsLoadingTree(false);
     }
+  };
+
+  const toggleDir = (path: string) => {
+    setFileExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  const expandAllDirs = () => {
+    setFileExpanded(new Set(collectDirPaths(displayedTree)));
+  };
+
+  const collapseAllDirs = () => {
+    setFileExpanded(new Set());
   };
 
   const handleFileClick = async (node: FileNode) => {
     if (node.is_dir) return;
+    setSelectedFilePath(node.path);
     try {
       const data = await readFile(node.path);
       onFileSelect?.(node.path, data.content || '');
@@ -164,16 +218,55 @@ export default function Sidebar({
 
         {activeTab === 'files' && (
           <div className="sidebar-group">
-            <div className="sidebar-head">
-               <Files size={14} />
-               <span className="sidebar-title">Project Files</span>
+            <div className="sidebar-head sidebar-head--files">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Files size={14} />
+                <span className="sidebar-title">Project Files</span>
+                <span className="files-count-pill">{fileStats.files}</span>
+              </div>
+              <div className="files-head-actions">
+                <button className="files-head-btn" onClick={() => loadTree(fileRoot)} title="Refresh tree" aria-label="Refresh tree">
+                  <RefreshCw size={12} className={isLoadingTree ? 'spin' : ''} />
+                </button>
+                <button className="files-head-btn" onClick={expandAllDirs} title="Expand all directories">Expand</button>
+                <button className="files-head-btn" onClick={collapseAllDirs} title="Collapse all directories">Collapse</button>
+              </div>
             </div>
-            <div className="lp-scrollable">
-               <FileTreeView 
-                 nodes={fileTree} 
-                 onFileClick={handleFileClick} 
-                 onContextMenu={(e, node) => { e.preventDefault(); }} 
-               />
+            <div className="files-meta-row">
+              <div className="files-meta" title={fileRoot}>
+                {truncate(fileRoot || '.', 48)}
+              </div>
+              <div className="files-stats">{fileStats.dirs} dirs · {fileStats.files} files</div>
+            </div>
+            <div className="lp-search-box lp-search-box--files">
+              <Search size={13} className="search-icon" />
+              <input
+                placeholder="Filter files..."
+                value={fileFilter}
+                onChange={e => setFileFilter(e.target.value)}
+                autoComplete="off"
+              />
+              {fileFilter && (
+                <button className="files-search-clear" onClick={() => setFileFilter('')}>
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+            <div className="lp-scrollable files-scroll">
+              {isLoadingTree ? (
+                <div className="empty-state">Loading files...</div>
+              ) : displayedTree.length === 0 ? (
+                <div className="empty-state">No matching files</div>
+              ) : (
+                <FileTreeView 
+                  nodes={displayedTree}
+                  expanded={fileExpanded}
+                  onToggleDir={toggleDir}
+                  selectedPath={selectedFilePath}
+                  onFileClick={handleFileClick}
+                  onContextMenu={(e, node) => { e.preventDefault(); }}
+                />
+              )}
             </div>
           </div>
         )}
@@ -189,7 +282,7 @@ export default function Sidebar({
         )}
 
         {activeTab === 'git' && (
-          <GitDashboard />
+          <GitDashboard globalSearchQuery={searchQuery} />
         )}
       </div>
     </div>
@@ -206,30 +299,115 @@ function groupSessions(sessions: Session[], pinnedIds: Set<string>, isSearching:
   return groups;
 }
 
-function FileTreeView({ nodes, depth = 0, onFileClick, onContextMenu }: any) {
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const toggle = (path: string) => {
-    setExpanded(prev => {
-      const next = new Set(prev);
-      next.has(path) ? next.delete(path) : next.add(path);
-      return next;
-    });
-  };
+function FileTreeView({
+  nodes,
+  depth = 0,
+  expanded,
+  onToggleDir,
+  selectedPath,
+  onFileClick,
+  onContextMenu,
+}: {
+  nodes: FileNode[];
+  depth?: number;
+  expanded: Set<string>;
+  onToggleDir: (path: string) => void;
+  selectedPath: string;
+  onFileClick: (node: FileNode) => void;
+  onContextMenu?: (e: React.MouseEvent, node: FileNode) => void;
+}) {
 
   return (
     <div className="f-tree">
-      {nodes.map((node: any) => (
-        <div key={node.path} className="f-node" style={{ paddingLeft: depth * 12 }}>
-          <div className={`f-row ${node.is_dir ? 'f-row--dir' : ''}`} onClick={() => node.is_dir ? toggle(node.path) : onFileClick(node)}>
-            <span className="f-chevron">{node.is_dir ? (expanded.has(node.path) ? <ChevronDown size={14}/> : <ChevronRight size={14}/>) : null}</span>
-            <span className="f-icon">{node.is_dir ? <Folder size={14}/> : <FileCode size={14}/>}</span>
+      {nodes.map((node) => {
+        const ext = !node.is_dir && node.name.includes('.') ? node.name.split('.').pop() : '';
+        const isExpanded = expanded.has(node.path);
+        return (
+        <div key={node.path} className="f-node">
+          <div
+            className={`f-row ${node.is_dir ? 'f-row--dir' : ''} ${selectedPath === node.path ? 'active' : ''}`}
+            style={{ paddingLeft: 8 + depth * 14 }}
+            onClick={() => node.is_dir ? onToggleDir(node.path) : onFileClick(node)}
+            title={node.path}
+            onContextMenu={(e) => onContextMenu?.(e, node)}
+          >
+            <span className={`f-chevron ${node.is_dir ? '' : 'is-placeholder'}`}>{node.is_dir ? (isExpanded ? <ChevronDown size={14}/> : <ChevronRight size={14}/>) : <ChevronRight size={14}/>}</span>
+            <span className="f-icon">{node.is_dir ? (isExpanded ? <FolderOpen size={14}/> : <Folder size={14}/>) : <FileCode size={14}/>}</span>
             <span className="f-name">{node.name}</span>
+            {!node.is_dir && ext && <span className="f-ext">{ext}</span>}
           </div>
-          {node.is_dir && expanded.has(node.path) && node.children && (
-            <FileTreeView nodes={node.children} depth={depth + 1} onFileClick={onFileClick} />
+          {node.is_dir && isExpanded && node.children && (
+            <FileTreeView
+              nodes={node.children}
+              depth={depth + 1}
+              expanded={expanded}
+              onToggleDir={onToggleDir}
+              selectedPath={selectedPath}
+              onFileClick={onFileClick}
+              onContextMenu={onContextMenu}
+            />
           )}
         </div>
-      ))}
+      )})}
     </div>
   );
+}
+
+function sortTree(nodes: FileNode[]): FileNode[] {
+  const sorted = [...nodes].sort((a, b) => {
+    if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+  });
+  return sorted.map(node =>
+    node.is_dir && node.children?.length
+      ? { ...node, children: sortTree(node.children) }
+      : node
+  );
+}
+
+function computeTreeStats(nodes: FileNode[]): { dirs: number; files: number } {
+  let dirs = 0;
+  let files = 0;
+  for (const node of nodes) {
+    if (node.is_dir) {
+      dirs += 1;
+      if (node.children?.length) {
+        const nested = computeTreeStats(node.children);
+        dirs += nested.dirs;
+        files += nested.files;
+      }
+    } else {
+      files += 1;
+    }
+  }
+  return { dirs, files };
+}
+
+function collectDirPaths(nodes: FileNode[]): string[] {
+  const out: string[] = [];
+  for (const node of nodes) {
+    if (node.is_dir) {
+      out.push(node.path);
+      if (node.children?.length) {
+        out.push(...collectDirPaths(node.children));
+      }
+    }
+  }
+  return out;
+}
+
+function filterTree(nodes: FileNode[], query: string): FileNode[] {
+  const result: FileNode[] = [];
+  for (const node of nodes) {
+    const nameMatch = node.name.toLowerCase().includes(query);
+    if (node.is_dir) {
+      const childMatches = node.children?.length ? filterTree(node.children, query) : [];
+      if (nameMatch || childMatches.length > 0) {
+        result.push({ ...node, children: childMatches });
+      }
+    } else if (nameMatch) {
+      result.push(node);
+    }
+  }
+  return result;
 }

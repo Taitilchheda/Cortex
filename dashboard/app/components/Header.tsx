@@ -61,11 +61,16 @@ export default function AppBar({
   }, []);
 
   const handleSearchSubmit = () => {
-    if (searchVal.trim()) {
-      onGlobalSearch(searchVal.trim());
-      setSearchFocused(false);
-    }
+    onGlobalSearch(searchVal.trim());
+    setSearchFocused(false);
   };
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      onGlobalSearch(searchVal.trim());
+    }, 180);
+    return () => clearTimeout(timer);
+  }, [searchVal, onGlobalSearch]);
 
   const unread = notifs.filter(n => !n.read).length;
 
@@ -111,7 +116,12 @@ export default function AppBar({
             onChange={e => setSearchVal(e.target.value)}
             onKeyDown={e => {
               if (e.key === 'Enter') handleSearchSubmit();
-              if (e.key === 'Escape') { setSearchFocused(false); searchRef.current?.blur(); }
+              if (e.key === 'Escape') {
+                setSearchVal('');
+                onGlobalSearch('');
+                setSearchFocused(false);
+                searchRef.current?.blur();
+              }
             }}
             onFocus={() => setSearchFocused(true)}
             onBlur={() => setTimeout(() => setSearchFocused(false), 200)}
